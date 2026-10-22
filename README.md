@@ -431,4 +431,4 @@ ported.
 
 ### Author
 
-PodFS is authored by **Noe Rodriguez**. GitHub: [github.com/noah](https://github.com/noah).
+PodFS is authored by **Noe Rodriguez**. GitHub: [github.com/noahrod](https://github.com/noahrod).
