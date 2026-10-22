@@ -50,8 +50,10 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
@@ -286,7 +288,8 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
 private enum class BrowseMode(val label: String, val icon: ImageVector) {
     Songs("Songs", Icons.Default.MusicNote),
     Artists("Artists", Icons.Default.Person),
-    Albums("Albums", Icons.Default.Album)
+    Albums("Albums", Icons.Default.Album),
+    Playlists("Playlists", Icons.Default.QueueMusic)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -337,12 +340,19 @@ private fun PodFsApp() {
         }
     }
 
-    fun togglePlayback(track: IpodTrack) {
+    fun togglePlayback(track: IpodTrack, queue: List<IpodTrack>) {
         if (playingTrack?.path == track.path) {
             playback.toggle()
             return
         }
-        playback.play(track, scanResult?.tracks.orEmpty(), selectedVolumeUri)
+        playback.play(track, queue, selectedVolumeUri)
+        selectedTab = AppTab.NowPlaying
+    }
+
+    fun playShuffled(tracks: List<IpodTrack>) {
+        if (tracks.isEmpty()) return
+        val shuffled = tracks.shuffled()
+        playback.play(shuffled.first(), shuffled, selectedVolumeUri)
         selectedTab = AppTab.NowPlaying
     }
 
@@ -440,14 +450,15 @@ private fun PodFsApp() {
                 onGroup = { selectedGroup = it },
                 onBack = { selectedGroup = null },
                 onChooseVolume = { picker.launch(null) },
-                onTrack = ::togglePlayback
+                onTrack = ::togglePlayback,
+                onShuffle = ::playShuffled
             )
             AppTab.NowPlaying -> NowPlayingScreen(
                 modifier = Modifier.padding(padding),
                 track = playingTrack,
                 rootUri = selectedVolumeUri,
                 isPlaying = isPlaying,
-                onToggle = { playingTrack?.let(::togglePlayback) },
+                onToggle = { if (playingTrack != null) playback.toggle() },
                 onPrevious = playback::previous,
                 onNext = playback::next,
                 onStop = playback::stop,
@@ -480,9 +491,17 @@ private fun LibraryScreen(
     onGroup: (String) -> Unit,
     onBack: () -> Unit,
     onChooseVolume: () -> Unit,
-    onTrack: (IpodTrack) -> Unit
+    onTrack: (IpodTrack, List<IpodTrack>) -> Unit,
+    onShuffle: (List<IpodTrack>) -> Unit
 ) {
     val tracks = result?.tracks ?: emptyList()
+    val tracksById = remember(tracks) { tracks.associateBy { it.trackId } }
+    val playlistSource = result?.playlists ?: emptyList()
+    val playlists = remember(playlistSource, tracksById) {
+        playlistSource
+            .map { playlist -> PlaylistEntry(playlist.name, playlist.trackIds.mapNotNull { tracksById[it] }) }
+            .filter { it.tracks.isNotEmpty() }
+    }
     Column(modifier = modifier.fillMaxSize()) {
         if (result == null && !isScanning) {
             EmptyLibrary(onChooseVolume)
@@ -509,15 +528,60 @@ private fun LibraryScreen(
                 }
             }
             BrowseSelector(browseMode, onBrowseMode)
-            if (selectedGroup != null) {
+            if (browseMode == BrowseMode.Playlists) {
+                if (selectedGroup != null) {
+                    val playlistTracks = playlists.firstOrNull { it.name == selectedGroup }?.tracks.orEmpty()
+                    GroupHeader(selectedGroup, onBack)
+                    ShuffleRow(playlistTracks, onShuffle)
+                    TrackList(playlistTracks, rootUri) { track -> onTrack(track, playlistTracks) }
+                } else {
+                    ShuffleRow(playlists.flatMap { it.tracks }.distinctBy { it.trackId }, onShuffle)
+                    PlaylistList(playlists, onGroup)
+                }
+            } else if (selectedGroup != null) {
                 GroupHeader(selectedGroup, onBack)
                 val groupedTracks = tracks.filter { browseMode.matches(it, selectedGroup) }
                     .let { if (browseMode == BrowseMode.Albums) it.sortedWith(compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }) else it }
-                TrackList(groupedTracks, rootUri, onTrack)
+                ShuffleRow(groupedTracks, onShuffle)
+                TrackList(groupedTracks, rootUri) { track -> onTrack(track, groupedTracks) }
             } else if (browseMode == BrowseMode.Songs) {
-                TrackList(tracks, rootUri, onTrack)
+                ShuffleRow(tracks, onShuffle)
+                TrackList(tracks, rootUri) { track -> onTrack(track, tracks) }
             } else {
+                ShuffleRow(tracks, onShuffle)
                 GroupList(browseMode, tracks, rootUri, onGroup)
+            }
+        }
+    }
+}
+
+private data class PlaylistEntry(val name: String, val tracks: List<IpodTrack>)
+
+@Composable
+private fun ShuffleRow(tracks: List<IpodTrack>, onShuffle: (List<IpodTrack>) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { onShuffle(tracks) }, enabled = tracks.isNotEmpty()) {
+            Icon(Icons.Default.Shuffle, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Shuffle ${tracks.size} songs")
+        }
+    }
+}
+
+@Composable
+private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> Unit) {
+    if (entries.isEmpty()) {
+        Text("No playlists found on this iPod.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(20.dp))
+        return
+    }
+    LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(entries) { entry ->
+            Row(modifier = Modifier.fillMaxWidth().clickable { onPlaylist(entry.name) }.padding(horizontal = 12.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(entry.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${entry.tracks.size} songs", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
             }
         }
     }
@@ -779,11 +843,12 @@ private fun SettingRow(title: String, value: String, icon: ImageVector) {
 private fun BrowseMode.groups(tracks: List<IpodTrack>): List<String> = when (this) {
     BrowseMode.Artists -> tracks.map { it.artist.ifEmpty { "Unknown Artist" } }
     BrowseMode.Albums -> tracks.map { it.album.ifEmpty { "Unknown Album" } }
-    BrowseMode.Songs -> emptyList()
+    BrowseMode.Songs, BrowseMode.Playlists -> emptyList()
 }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
 
+// Playlist membership is resolved from iTunesDB playlists, not by group name.
 private fun BrowseMode.matches(track: IpodTrack, group: String): Boolean = when (this) {
     BrowseMode.Artists -> track.artist.ifEmpty { "Unknown Artist" } == group
     BrowseMode.Albums -> track.album.ifEmpty { "Unknown Album" } == group
-    BrowseMode.Songs -> true
+    BrowseMode.Songs, BrowseMode.Playlists -> true
 }

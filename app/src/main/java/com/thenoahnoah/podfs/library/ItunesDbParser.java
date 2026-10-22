@@ -4,7 +4,9 @@ import androidx.annotation.NonNull;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Read-only parser for the classic iTunesDB chunk format used by iPod Classic. */
 public final class ItunesDbParser {
@@ -32,6 +34,74 @@ public final class ItunesDbParser {
             parseLooseTrackRecords(data, (int) databaseLength, tracks);
         }
         return tracks;
+    }
+
+    /**
+     * Reads user playlists (mhyp records). The master playlist, which lists every track
+     * and is flagged at mhyp+0x14, is skipped. Copies of the same playlist that appear in
+     * several playlist sections are merged by their persistent ID.
+     */
+    @NonNull
+    public static List<IpodPlaylist> parsePlaylists(@NonNull byte[] data) {
+        List<IpodPlaylist> playlists = new ArrayList<>();
+        if (data.length < 12 || !marker(data, 0, "mhbd")) {
+            return playlists;
+        }
+        long databaseLength = Math.min(uint32(data, 8), data.length);
+        Set<Long> seen = new HashSet<>();
+        int offset = 0;
+        while (offset + 12 <= databaseLength) {
+            if (!marker(data, offset, "mhyp")) {
+                offset++;
+                continue;
+            }
+            long headerLength = uint32(data, offset + 4);
+            long totalLength = uint32(data, offset + 8);
+            if (headerLength < 0x20 || totalLength < headerLength
+                    || totalLength > databaseLength - offset) {
+                offset++;
+                continue;
+            }
+            int end = offset + (int) totalLength;
+            IpodPlaylist playlist = parsePlaylist(data, offset, (int) headerLength, end);
+            // Empty entries are the built-in library lists (Music, Movies, ...) and carry no tracks.
+            if (playlist != null && !playlist.getTrackIds().isEmpty()
+                    && seen.add(playlist.getPersistentId())) {
+                playlists.add(playlist);
+            }
+            offset = end;
+        }
+        return playlists;
+    }
+
+    private static IpodPlaylist parsePlaylist(byte[] data, int offset, int headerLength, int end) {
+        if (uint32(data, offset + 0x14) != 0) {
+            return null;
+        }
+        long persistentId = uint32(data, offset + 0x18) | (uint32(data, offset + 0x1c) << 32);
+        String name = "";
+        List<Long> trackIds = new ArrayList<>();
+        int childOffset = offset + headerLength;
+        while (childOffset + 12 <= end) {
+            long childHeader = uint32(data, childOffset + 4);
+            long length = uint32(data, childOffset + 8);
+            if (childHeader < 16 || length < childHeader || length > end - childOffset) {
+                return null;
+            }
+            if (marker(data, childOffset, "mhod")) {
+                if (uint32(data, childOffset + 12) == 1) {
+                    name = readString(data, childOffset, (int) childHeader,
+                            childOffset + (int) length);
+                }
+            } else if (marker(data, childOffset, "mhip")) {
+                if (childHeader >= 0x1c) {
+                    trackIds.add(uint32(data, childOffset + 0x18));
+                }
+            }
+            // mhip records carry their own mhod children; skipping by length covers them.
+            childOffset += (int) length;
+        }
+        return new IpodPlaylist(name.isEmpty() ? "Untitled Playlist" : name, persistentId, trackIds);
     }
 
     private static void parseLooseTrackRecords(byte[] data, int limit,
@@ -152,7 +222,8 @@ public final class ItunesDbParser {
         }
         long trackId = headerLength >= 0x14 ? uint32(data, offset + 0x10) : 0;
         int trackNumber = headerLength >= 0x18 ? (int) uint32(data, offset + 0x14) : 0;
-        return new IpodTrack(trackId, trackNumber, title.isEmpty() ? "Untitled" : title,
+        long dbId = headerLength >= 0x78 ? uint64(data, offset + 0x70) : 0;
+        return new IpodTrack(trackId, dbId, trackNumber, title.isEmpty() ? "Untitled" : title,
             artist, album, path, null);
     }
 
@@ -186,6 +257,10 @@ public final class ItunesDbParser {
     @NonNull
     private static String markerName(byte[] data, int offset) {
         return new String(data, offset, 4, StandardCharsets.US_ASCII);
+    }
+
+    private static long uint64(byte[] data, int offset) {
+        return uint32(data, offset) | (uint32(data, offset + 4) << 32);
     }
 
     private static long uint32(byte[] data, int offset) {

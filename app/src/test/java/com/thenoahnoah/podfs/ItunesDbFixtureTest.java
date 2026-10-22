@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -78,21 +79,48 @@ public class ItunesDbFixtureTest {
 
         int resolved = 0;
         for (IpodTrack track : tracks) {
-            ArtworkDbParser.Location location = locations.get(track.getTrackId());
+            ArtworkDbParser.Location location = locations.get(track.getDbId());
             if (location == null) {
                 continue;
             }
             int start = (int) location.getOffset();
             int end = start + (int) location.getSize();
-            assertTrue("Artwork range exceeds shard for track " + track.getTrackId(),
+            assertTrue("Artwork range exceeds shard for track " + track.getDbId(),
                     start >= 0 && end <= shardData.length);
             byte[] payload = java.util.Arrays.copyOfRange(shardData, start, end);
             Artwork artwork = ArtworkDbParser.decodeRgb565(payload, location.getWidth(), location.getHeight());
-            assertTrue("Decoded cover is blank for track " + track.getTrackId(),
+            assertTrue("Decoded cover is blank for track " + track.getDbId(),
                     hasVisiblePixels(artwork.getRgb()));
             resolved++;
         }
-        assertTrue("Expected many iTunesDB tracks to resolve covers; resolved=" + resolved, resolved >= 100);
+        assertEquals("Every ArtworkDB entry should join to one iTunesDB track by dbId",
+                locations.size(), resolved);
+    }
+
+    @Test
+    public void parsesCopiedPlaylists() throws IOException {
+        File database = findFixture();
+        assertTrue("Copied iTunesDB fixture is missing", database.isFile());
+
+        byte[] data = Files.readAllBytes(database.toPath());
+        List<IpodTrack> tracks = ItunesDbParser.parse(data);
+        List<com.thenoahnoah.podfs.library.IpodPlaylist> playlists = ItunesDbParser.parsePlaylists(data);
+
+        assertTrue("Expected the two user playlists; count=" + playlists.size(), playlists.size() == 2);
+        java.util.Set<Long> trackIds = new java.util.HashSet<>();
+        for (IpodTrack track : tracks) {
+            trackIds.add(track.getTrackId());
+        }
+        java.util.List<Integer> sizes = new java.util.ArrayList<>();
+        for (com.thenoahnoah.podfs.library.IpodPlaylist playlist : playlists) {
+            assertFalse("Playlist has no name", playlist.getName().isEmpty());
+            sizes.add(playlist.getTrackIds().size());
+            for (Long trackId : playlist.getTrackIds()) {
+                assertTrue("Playlist references unknown track " + trackId, trackIds.contains(trackId));
+            }
+        }
+        java.util.Collections.sort(sizes);
+        assertEquals(java.util.Arrays.asList(40, 46), sizes);
     }
 
     private static boolean hasVisiblePixels(byte[] rgb) {
@@ -106,9 +134,9 @@ public class ItunesDbFixtureTest {
 
     private static File findFixture() {
         String[] candidates = {
-                "example/iTunes/iTunes/iTunesDB",
-                "../example/iTunes/iTunes/iTunesDB",
-                "../../example/iTunes/iTunes/iTunesDB"
+                "example/iPod_Control/iTunes/iTunesDB",
+                "../example/iPod_Control/iTunes/iTunesDB",
+                "../../example/iPod_Control/iTunes/iTunesDB"
         };
         for (String candidate : candidates) {
             File file = new File(candidate);
@@ -121,9 +149,9 @@ public class ItunesDbFixtureTest {
 
     private static File findArtworkFixture() {
         String[] candidates = {
-                "example/Artwork/ArtworkDB",
-                "../example/Artwork/ArtworkDB",
-                "../../example/Artwork/ArtworkDB"
+                "example/iPod_Control/Artwork/ArtworkDB",
+                "../example/iPod_Control/Artwork/ArtworkDB",
+                "../../example/iPod_Control/Artwork/ArtworkDB"
         };
         for (String candidate : candidates) {
             File file = new File(candidate);

@@ -20,10 +20,25 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class IpodScanner {
-    private static final String CACHE_VERSION = "v3:";
+    private static final String CACHE_VERSION = "v5:";
     private static final Map<String, Map<Long, ArtworkDbParser.Location>> ARTWORK_INDEX_CACHE =
             new ConcurrentHashMap<>();
     private IpodScanner() {
+    }
+
+    /** Tracks and playlists read together from one iTunesDB. */
+    private static final class LibraryData {
+        final List<IpodTrack> tracks;
+        final List<IpodPlaylist> playlists;
+
+        LibraryData(List<IpodTrack> tracks, List<IpodPlaylist> playlists) {
+            this.tracks = tracks;
+            this.playlists = playlists;
+        }
+
+        static LibraryData empty() {
+            return new LibraryData(new ArrayList<>(), new ArrayList<>());
+        }
     }
 
     @NonNull
@@ -41,11 +56,12 @@ public final class IpodScanner {
         }
 
         DocumentFile database = childFile(root, "iPod_Control/iTunes/iTunesDB");
-        List<IpodTrack> tracks = readCachedTracks(context, rootUri, database);
-        if (tracks.isEmpty()) {
-            tracks = readDatabase(context, root);
-            writeCachedTracks(context, rootUri, database, tracks);
+        LibraryData library = readCachedLibrary(context, rootUri, database);
+        if (library == null || library.tracks.isEmpty()) {
+            library = readDatabase(context, root);
+            writeCachedLibrary(context, rootUri, database, library);
         }
+        List<IpodTrack> tracks = new ArrayList<>(library.tracks);
         boolean usedFallback = tracks.isEmpty();
         if (tracks.isEmpty()) {
             collectMp3s(childDirectory(root, "iPod_Control/Music"), tracks);
@@ -60,55 +76,84 @@ public final class IpodScanner {
         } else {
             message = tracks.size() + " MP3 tracks loaded from iTunesDB.";
         }
-        return new IpodScanResult(true, tracks, message);
+        return new IpodScanResult(true, tracks, library.playlists, message);
     }
 
-    @NonNull
-    private static List<IpodTrack> readCachedTracks(@NonNull Context context, @NonNull Uri rootUri,
-                                                    DocumentFile database) {
+    private static LibraryData readCachedLibrary(@NonNull Context context, @NonNull Uri rootUri,
+                                                 DocumentFile database) {
         if (database == null) {
-            return new ArrayList<>();
+            return null;
         }
         SharedPreferences preferences = context.getSharedPreferences("podfs_scan_cache", Context.MODE_PRIVATE);
-        String key = cacheKey(rootUri, database);
-        String encoded = preferences.getString(key, null);
+        String encoded = preferences.getString(cacheKey(rootUri, database), null);
         if (encoded == null) {
-            return new ArrayList<>();
+            return null;
         }
         try {
-            JSONArray array = new JSONArray(encoded);
+            JSONObject cached = new JSONObject(encoded);
+            JSONArray trackArray = cached.getJSONArray("tracks");
             List<IpodTrack> tracks = new ArrayList<>();
-            for (int index = 0; index < array.length(); index++) {
-                JSONObject item = array.getJSONObject(index);
-                tracks.add(new IpodTrack(item.getLong("id"), item.optInt("trackNumber", 0), item.getString("title"),
+            for (int index = 0; index < trackArray.length(); index++) {
+                JSONObject item = trackArray.getJSONObject(index);
+                tracks.add(new IpodTrack(item.getLong("id"), item.optLong("dbId", 0),
+                        item.optInt("trackNumber", 0), item.getString("title"),
                         item.getString("artist"), item.getString("album"),
                         item.getString("path"), null));
             }
-            return tracks;
+            List<IpodPlaylist> playlists = new ArrayList<>();
+            JSONArray playlistArray = cached.optJSONArray("playlists");
+            if (playlistArray != null) {
+                for (int index = 0; index < playlistArray.length(); index++) {
+                    JSONObject item = playlistArray.getJSONObject(index);
+                    JSONArray ids = item.getJSONArray("trackIds");
+                    List<Long> trackIds = new ArrayList<>();
+                    for (int id = 0; id < ids.length(); id++) {
+                        trackIds.add(ids.getLong(id));
+                    }
+                    playlists.add(new IpodPlaylist(item.getString("name"), item.getLong("id"), trackIds));
+                }
+            }
+            return new LibraryData(tracks, playlists);
         } catch (Exception ignored) {
-            return new ArrayList<>();
+            return null;
         }
     }
 
-    private static void writeCachedTracks(@NonNull Context context, @NonNull Uri rootUri,
-                                          DocumentFile database, @NonNull List<IpodTrack> tracks) {
-        if (database == null || tracks.isEmpty()) {
+    private static void writeCachedLibrary(@NonNull Context context, @NonNull Uri rootUri,
+                                           DocumentFile database, @NonNull LibraryData library) {
+        if (database == null || library.tracks.isEmpty()) {
             return;
         }
         try {
-            JSONArray array = new JSONArray();
-            for (IpodTrack track : tracks) {
+            JSONArray trackArray = new JSONArray();
+            for (IpodTrack track : library.tracks) {
                 JSONObject item = new JSONObject();
                 item.put("id", track.getTrackId());
+                item.put("dbId", track.getDbId());
                 item.put("trackNumber", track.getTrackNumber());
                 item.put("title", track.getTitle());
                 item.put("artist", track.getArtist());
                 item.put("album", track.getAlbum());
                 item.put("path", track.getPath());
-                array.put(item);
+                trackArray.put(item);
             }
+            JSONArray playlistArray = new JSONArray();
+            for (IpodPlaylist playlist : library.playlists) {
+                JSONObject item = new JSONObject();
+                item.put("name", playlist.getName());
+                item.put("id", playlist.getPersistentId());
+                JSONArray ids = new JSONArray();
+                for (long trackId : playlist.getTrackIds()) {
+                    ids.put(trackId);
+                }
+                item.put("trackIds", ids);
+                playlistArray.put(item);
+            }
+            JSONObject cached = new JSONObject();
+            cached.put("tracks", trackArray);
+            cached.put("playlists", playlistArray);
             context.getSharedPreferences("podfs_scan_cache", Context.MODE_PRIVATE)
-                    .edit().putString(cacheKey(rootUri, database), array.toString()).apply();
+                    .edit().putString(cacheKey(rootUri, database), cached.toString()).apply();
         } catch (Exception ignored) {
             // A cache failure must never prevent a normal scan.
         }
@@ -120,18 +165,19 @@ public final class IpodScanner {
     }
 
     @NonNull
-    private static List<IpodTrack> readDatabase(@NonNull Context context,
-                                                @NonNull DocumentFile root) {
+    private static LibraryData readDatabase(@NonNull Context context,
+                                            @NonNull DocumentFile root) {
         DocumentFile database = childFile(root, "iPod_Control/iTunes/iTunesDB");
         if (database == null) {
-            return new ArrayList<>();
+            return LibraryData.empty();
         }
         try (InputStream input = context.getContentResolver().openInputStream(database.getUri())) {
             if (input == null) {
-                return new ArrayList<>();
+                return LibraryData.empty();
             }
             byte[] data = readAll(input);
             List<IpodTrack> parsed = ItunesDbParser.parse(data);
+            List<IpodPlaylist> playlists = ItunesDbParser.parsePlaylists(data);
             Map<String, Map<String, DocumentFile>> directoryCache = new HashMap<>();
             List<IpodTrack> resolved = new ArrayList<>();
             for (IpodTrack track : parsed) {
@@ -141,19 +187,19 @@ public final class IpodScanner {
                 DocumentFile media = childFileCached(root, databasePath(track.getPath()),
                         directoryCache);
                 if (media != null && media.isFile()) {
-                    resolved.add(new IpodTrack(track.getTrackId(), track.getTrackNumber(), track.getTitle(),
-                        track.getArtist(), track.getAlbum(), media.getUri().toString(), null));
+                    resolved.add(new IpodTrack(track.getTrackId(), track.getDbId(), track.getTrackNumber(),
+                        track.getTitle(), track.getArtist(), track.getAlbum(), media.getUri().toString(), null));
                 }
             }
-            return resolved;
+            return new LibraryData(resolved, playlists);
         } catch (IOException | IllegalArgumentException ignored) {
-            return new ArrayList<>();
+            return LibraryData.empty();
         }
     }
 
     public static Artwork loadArtwork(@NonNull Context context, @NonNull Uri rootUri,
                                       @NonNull IpodTrack track) {
-        if (track.getTrackId() == 0) {
+        if (track.getDbId() == 0) {
             return null;
         }
         DocumentFile root = DocumentFile.fromTreeUri(context, rootUri);
@@ -173,7 +219,7 @@ public final class IpodScanner {
             }
             ARTWORK_INDEX_CACHE.put(key, index);
         }
-        return readCover(context, root, index.get(track.getTrackId()));
+        return readCover(context, root, index.get(track.getDbId()));
     }
 
     @NonNull

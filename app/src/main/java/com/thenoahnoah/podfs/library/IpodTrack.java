@@ -4,6 +4,8 @@ import androidx.annotation.NonNull;
 
 public final class IpodTrack {
     private final long trackId;
+    /** 64-bit database id (mhit +0x70). Joins to ArtworkDB mhii track refs. */
+    private final long dbId;
     private final int trackNumber;
     private final String title;
     private final String artist;
@@ -28,7 +30,14 @@ public final class IpodTrack {
     public IpodTrack(long trackId, int trackNumber, @NonNull String title,
                      @NonNull String artist, @NonNull String album,
                      @NonNull String path, Artwork artwork) {
+        this(trackId, 0, trackNumber, title, artist, album, path, artwork);
+    }
+
+    public IpodTrack(long trackId, long dbId, int trackNumber, @NonNull String title,
+                     @NonNull String artist, @NonNull String album,
+                     @NonNull String path, Artwork artwork) {
         this.trackId = trackId;
+        this.dbId = dbId;
         this.trackNumber = trackNumber;
         this.title = title;
         this.artist = artist;
@@ -39,6 +48,10 @@ public final class IpodTrack {
 
     public long getTrackId() {
         return trackId;
+    }
+
+    public long getDbId() {
+        return dbId;
     }
 
     public int getTrackNumber() {
