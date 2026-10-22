@@ -27,7 +27,9 @@ The project contains a working first vertical slice:
 - Playlists come from iTunesDB `mhyp` records and open into their songs.
 - Shuffle plays the current songs, group, or playlist in random order.
 - A Settings tab shows a timestamped activity log of scan stages, browsing,
-  and playback events.
+  and playback events. It is saved to app storage across launches, and uncaught
+  crashes are recorded with their stack trace. The Email debug log button opens
+  a mail draft with the log; without a mail app it falls back to the share sheet.
 - Artists and albums open into their associated songs.
 - The UI displays title, artist, album metadata, and lazily loaded artwork from
   ArtworkDB/iTHMB when the relevant track row becomes visible.
@@ -128,8 +130,9 @@ MainActivity.kt
 - takes persistable read permission;
 - launches scanning on `Dispatchers.IO`;
 - displays scan status and Songs, Artists, Albums, and Playlists browse modes;
-- shows the Settings tab with the latest 500 activity-log entries, newest first,
-  including scan stages and duration;
+- shows the Settings tab with the newest 20 activity-log lines first, a Load more
+  button that reveals 20 more per press, an Email debug log button, and a Delete
+  debug log button that asks for confirmation;
 - owns the queue-aware `MediaPlayer` controller and media session;
 - publishes playback metadata and notification actions to Android;
 - converts decoded artwork RGB bytes into an Android `Bitmap` for display.
@@ -262,6 +265,7 @@ PodFS/
       AndroidManifest.xml          Launcher activity; no raw USB permissions
       java/com/thenoahnoah/podfs/
         MainActivity.kt             Compose UI and MediaPlayer control
+        DebugLog.kt                 Persistent debug log and crash capture
         library/
           Artwork.java              Decoded artwork model
           ArtworkDbParser.java      ArtworkDB index and RGB565 decoder

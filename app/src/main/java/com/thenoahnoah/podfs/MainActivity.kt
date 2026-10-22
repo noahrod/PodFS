@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -70,6 +71,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -101,14 +103,12 @@ import com.thenoahnoah.podfs.ui.theme.PodFSTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DebugLog.init(this)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
         }
@@ -322,14 +322,36 @@ private fun PodFsApp() {
     var isScanning by remember { mutableStateOf(false) }
     var playingTrack by remember { mutableStateOf<IpodTrack?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
-    var activityLog by remember { mutableStateOf(listOf("PodFS ready.")) }
+    var activityLog by remember { mutableStateOf(DebugLog.snapshot()) }
     var selectedVolumeUri by remember {
         mutableStateOf(preferences.getString("selected_volume_uri", null)?.let(Uri::parse))
     }
 
     fun log(message: String) {
-        val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        activityLog = (activityLog + "$time  $message").takeLast(500)
+        activityLog = DebugLog.append(message)
+    }
+
+    fun shareDebugLog() {
+        val subject = "PodFS debug log"
+        val body = DebugLog.exportText()
+        try {
+            context.startActivity(
+                Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+                    .putExtra(Intent.EXTRA_SUBJECT, subject)
+                    .putExtra(Intent.EXTRA_TEXT, body)
+            )
+        } catch (_: ActivityNotFoundException) {
+            try {
+                val share = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, subject)
+                    .putExtra(Intent.EXTRA_TEXT, body)
+                context.startActivity(Intent.createChooser(share, "Share debug log"))
+            } catch (_: ActivityNotFoundException) {
+                log("No app available to share the debug log.")
+                return
+            }
+        }
+        log("Debug log shared.")
     }
 
     val playback = remember {
@@ -503,6 +525,8 @@ private fun PodFsApp() {
                 activityLog = activityLog,
                 savedVolume = preferences.getString("selected_volume_uri", null) != null,
                 onChooseVolume = ::openVolumePicker,
+                onShareLog = ::shareDebugLog,
+                onClearLog = { activityLog = DebugLog.clear() },
                 onClearVolume = {
                     preferences.edit().remove("selected_volume_uri").apply()
                     scanResult = null
@@ -816,9 +840,13 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
     }
 }
 
+private const val LOG_PAGE = 20
+
 @Composable
-private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit) {
+private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    var visibleLines by remember { mutableStateOf(LOG_PAGE) }
+    var confirmClear by remember { mutableStateOf(false) }
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
@@ -844,8 +872,26 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         } }
         item { SettingSection("DEBUG LOG", Icons.Default.BugReport) {
-            activityLog.asReversed().forEach { entry -> Text(entry, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp)) }
+            Button(onClick = onShareLog, modifier = Modifier.fillMaxWidth()) { Text("Email debug log") }
+            Button(onClick = { confirmClear = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete debug log") }
+            activityLog.asReversed().take(visibleLines).forEach { entry -> Text(entry, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp)) }
+            if (visibleLines < activityLog.size) {
+                Button(onClick = { visibleLines += LOG_PAGE }, modifier = Modifier.fillMaxWidth()) { Text("Load more") }
+            }
         } }
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Delete debug log?") },
+            text = { Text("This removes all saved log entries from this device.") },
+            confirmButton = {
+                TextButton(onClick = { confirmClear = false; onClearLog() }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
