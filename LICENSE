@@ -1,0 +1,7 @@
+PodFS is licensed under the GNU General Public License, version 3.
+
+The complete license text is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+This project is intended to include parser code ported from iOpenPod, which is
+licensed under GPL-3.0-or-later. See https://github.com/TheRealSavi/iOpenPod.

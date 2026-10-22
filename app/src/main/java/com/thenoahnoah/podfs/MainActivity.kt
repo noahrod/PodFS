@@ -1,0 +1,723 @@
+package com.thenoahnoah.podfs
+
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import android.content.Context
+import android.content.Intent
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Bundle
+import android.os.SystemClock
+import android.os.Build
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
+import android.app.PendingIntent
+import android.content.pm.PackageManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.thenoahnoah.podfs.library.IpodScanResult
+import com.thenoahnoah.podfs.library.IpodScanner
+import com.thenoahnoah.podfs.library.IpodTrack
+import com.thenoahnoah.podfs.library.Artwork
+import com.thenoahnoah.podfs.ui.theme.PodFSTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
+        }
+        enableEdgeToEdge()
+        setContent {
+            PodFSTheme {
+                PodFsApp()
+            }
+        }
+    }
+}
+
+private class PlaybackController(
+    private val context: Context,
+    private val onStateChanged: (IpodTrack?, Boolean) -> Unit,
+    private val onLog: (String) -> Unit
+) {
+    private val notificationManager = context.getSystemService(NotificationManager::class.java)
+    private val session = MediaSessionCompat(context, "PodFS").apply {
+        setCallback(object : MediaSessionCompat.Callback() {
+            override fun onPlay() = resume()
+            override fun onPause() = pause()
+            override fun onStop() = stop()
+            override fun onSkipToNext() = next()
+            override fun onSkipToPrevious() = previous()
+        })
+        isActive = true
+    }
+    private var player: MediaPlayer? = null
+    private var queue = emptyList<IpodTrack>()
+    private var index = -1
+    private var current: IpodTrack? = null
+    private var isPlaying = false
+
+    init {
+        if (Build.VERSION.SDK_INT >= 26) {
+            notificationManager.createNotificationChannel(NotificationChannel("podfs_playback", "PodFS playback", NotificationManager.IMPORTANCE_LOW))
+        }
+    }
+
+    fun play(track: IpodTrack, tracks: List<IpodTrack>) {
+        queue = tracks
+        index = queue.indexOfFirst { it.path == track.path }.takeIf { it >= 0 } ?: 0
+        openCurrent()
+    }
+
+    fun toggle() {
+        if (player?.isPlaying == true) pause() else resume()
+    }
+
+    fun next() {
+        if (queue.isNotEmpty() && index < queue.lastIndex) {
+            index++
+            openCurrent()
+        }
+    }
+
+    fun previous() {
+        if (queue.isNotEmpty() && index > 0) {
+            index--
+            openCurrent()
+        }
+    }
+
+    fun pause() {
+        player?.pause()
+        isPlaying = false
+        publishState()
+    }
+
+    fun resume() {
+        player?.start()
+        isPlaying = player != null
+        publishState()
+    }
+
+    fun stop() {
+        player?.stop()
+        player?.release()
+        player = null
+        isPlaying = false
+        current = null
+        session.isActive = false
+        notificationManager.cancel(42)
+        onStateChanged(null, false)
+    }
+
+    fun release() {
+        stop()
+        session.release()
+    }
+
+    private fun openCurrent() {
+        val track = queue.getOrNull(index) ?: return
+        player?.release()
+        player = try { MediaPlayer.create(context, Uri.parse(track.path)) } catch (_: RuntimeException) { null }
+        if (player == null) {
+            onLog("Playback could not open: ${track.title}")
+            onStateChanged(null, false)
+            return
+        }
+        current = track
+        player?.setOnCompletionListener {
+            if (index < queue.lastIndex) {
+                index++
+                openCurrent()
+            } else {
+                pause()
+            }
+        }
+        player?.start()
+        isPlaying = true
+        session.isActive = true
+        publishState()
+        onLog("Playing: ${track.title}")
+    }
+
+    private fun publishState() {
+        val track = current
+        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+        session.setPlaybackState(PlaybackStateCompat.Builder().setActions(actions)
+            .setState(if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED, player?.currentPosition?.toLong() ?: 0L, 1f).build())
+        if (track != null) {
+            session.setMetadata(MediaMetadataCompat.Builder().putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album).build())
+            val notification = NotificationCompat.Builder(context, "podfs_playback")
+                .setSmallIcon(com.thenoahnoah.podfs.R.drawable.ic_launcher_foreground)
+                .setContentTitle(track.title).setContentText(track.artist.ifEmpty { track.album })
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(isPlaying)
+                .setStyle(MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2))
+                .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Previous", actionIntent("previous")))
+                .addAction(NotificationCompat.Action(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (isPlaying) "Pause" else "Play", actionIntent(if (isPlaying) "pause" else "play")))
+                .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Next", actionIntent("next")))
+                .addAction(NotificationCompat.Action(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent("stop"))).build()
+            notificationManager.notify(42, notification)
+            onStateChanged(track, isPlaying)
+        }
+    }
+
+    private fun actionIntent(action: String): PendingIntent = PendingIntent.getBroadcast(context, action.hashCode(), PlaybackActionReceiver.intent(context, action), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+}
+
+private class PlaybackActionReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.getStringExtra("action")) {
+            "previous" -> active?.previous()
+            "play" -> active?.resume()
+            "pause" -> active?.pause()
+            "next" -> active?.next()
+            "stop" -> active?.stop()
+        }
+    }
+
+    companion object {
+        var active: PlaybackController? = null
+        fun intent(context: Context, action: String) = Intent(context, PlaybackActionReceiver::class.java).putExtra("action", action)
+    }
+}
+
+private enum class AppTab(val label: String, val icon: ImageVector) {
+    Library("Library", Icons.Default.LibraryMusic),
+    NowPlaying("Now Playing", Icons.Default.Headphones),
+    Settings("Settings", Icons.Default.Settings)
+}
+
+private enum class BrowseMode(val label: String, val icon: ImageVector) {
+    Songs("Songs", Icons.Default.MusicNote),
+    Artists("Artists", Icons.Default.Person),
+    Albums("Albums", Icons.Default.Album)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PodFsApp() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val preferences = remember { context.getSharedPreferences("podfs", Context.MODE_PRIVATE) }
+    var selectedTab by remember { mutableStateOf(AppTab.Library) }
+    var browseMode by remember { mutableStateOf(BrowseMode.Songs) }
+    var selectedGroup by remember { mutableStateOf<String?>(null) }
+    var scanResult by remember { mutableStateOf<IpodScanResult?>(null) }
+    var isScanning by remember { mutableStateOf(false) }
+    var playingTrack by remember { mutableStateOf<IpodTrack?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var activityLog by remember { mutableStateOf(listOf("PodFS ready.")) }
+    var selectedVolumeUri by remember {
+        mutableStateOf(preferences.getString("selected_volume_uri", null)?.let(Uri::parse))
+    }
+
+    fun log(message: String) {
+        activityLog = (activityLog + message).takeLast(20)
+    }
+
+    val playback = remember {
+        PlaybackController(context, { track, playing ->
+            playingTrack = track
+            isPlaying = playing
+        }, ::log).also { PlaybackActionReceiver.active = it }
+    }
+
+    fun scanVolume(uri: Uri) {
+        isScanning = true
+        log("Starting iPod scan...")
+        scope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                scanResult = withContext(Dispatchers.IO) { IpodScanner.scan(context, uri) }
+                val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1000.0
+                log("Scan complete in ${"%.1f".format(seconds)}s: ${scanResult?.message}")
+            } catch (error: Exception) {
+                val message = error.message ?: "storage could not be read"
+                log("Scan failed: $message")
+                scanResult = IpodScanResult(false, emptyList(), "Scan failed: $message")
+            } finally {
+                isScanning = false
+            }
+        }
+    }
+
+    fun togglePlayback(track: IpodTrack) {
+        if (playingTrack?.path == track.path) {
+            playback.toggle()
+            return
+        }
+        playback.play(track, scanResult?.tracks.orEmpty())
+        selectedTab = AppTab.NowPlaying
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
+            selectedVolumeUri = uri
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            log("Selected storage volume.")
+            scanVolume(uri)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val savedUri = preferences.getString("selected_volume_uri", null)?.let(Uri::parse)
+        if (savedUri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(savedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                log("Restored previously selected volume.")
+                scanVolume(savedUri)
+            } catch (_: SecurityException) {
+                preferences.edit().remove("selected_volume_uri").apply()
+                log("Saved volume permission is no longer available.")
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            playback.release()
+            PlaybackActionReceiver.active = null
+        }
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("PODFS", fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                        Text(
+                            when (selectedTab) {
+                                AppTab.Library -> "YOUR LIBRARY"
+                                AppTab.NowPlaying -> "NOW PLAYING"
+                                AppTab.Settings -> "APP SETTINGS"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                actions = {
+                    if (selectedTab == AppTab.Library) {
+                        IconButton(onClick = { picker.launch(null) }, enabled = !isScanning) {
+                            Icon(Icons.Default.Usb, "Choose iPod volume")
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+            )
+        },
+        bottomBar = {
+            Column {
+                playingTrack?.let { track ->
+                    MiniPlayer(track, isPlaying) {
+                        selectedTab = AppTab.NowPlaying
+                    }
+                }
+                NavigationBar(
+                    modifier = Modifier.navigationBarsPadding(),
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    AppTab.entries.forEach { tab ->
+                        NavigationBarItem(
+                            selected = selectedTab == tab,
+                            onClick = { selectedTab = tab },
+                            icon = { Icon(tab.icon, tab.label) },
+                            label = { Text(tab.label) }
+                        )
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        when (selectedTab) {
+            AppTab.Library -> LibraryScreen(
+                modifier = Modifier.padding(padding),
+                result = scanResult,
+                rootUri = selectedVolumeUri,
+                isScanning = isScanning,
+                browseMode = browseMode,
+                selectedGroup = selectedGroup,
+                onBrowseMode = { browseMode = it; selectedGroup = null },
+                onGroup = { selectedGroup = it },
+                onBack = { selectedGroup = null },
+                onChooseVolume = { picker.launch(null) },
+                onTrack = ::togglePlayback
+            )
+            AppTab.NowPlaying -> NowPlayingScreen(
+                modifier = Modifier.padding(padding),
+                track = playingTrack,
+                isPlaying = isPlaying,
+                onToggle = { playingTrack?.let(::togglePlayback) },
+                onPrevious = playback::previous,
+                onNext = playback::next,
+                onStop = playback::stop,
+                onBrowse = { selectedTab = AppTab.Library }
+            )
+            AppTab.Settings -> SettingsScreen(
+                modifier = Modifier.padding(padding),
+                activityLog = activityLog,
+                savedVolume = preferences.getString("selected_volume_uri", null) != null,
+                onChooseVolume = { picker.launch(null) },
+                onClearVolume = {
+                    preferences.edit().remove("selected_volume_uri").apply()
+                    scanResult = null
+                    log("Remembered volume cleared.")
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun LibraryScreen(
+    modifier: Modifier,
+    result: IpodScanResult?,
+    rootUri: Uri?,
+    isScanning: Boolean,
+    browseMode: BrowseMode,
+    selectedGroup: String?,
+    onBrowseMode: (BrowseMode) -> Unit,
+    onGroup: (String) -> Unit,
+    onBack: () -> Unit,
+    onChooseVolume: () -> Unit,
+    onTrack: (IpodTrack) -> Unit
+) {
+    val tracks = result?.tracks ?: emptyList()
+    Column(modifier = modifier.fillMaxSize()) {
+        if (result == null && !isScanning) {
+            EmptyLibrary(onChooseVolume)
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (isScanning) "Scanning your iPod" else "Music library",
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                    Text(
+                        if (isScanning) "Reading tracks and metadata..." else result?.message.orEmpty(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (isScanning) {
+                    Icon(Icons.Default.Refresh, "Scanning", tint = MaterialTheme.colorScheme.primary)
+                } else {
+                    Text("${tracks.size}", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+                }
+            }
+            BrowseSelector(browseMode, onBrowseMode)
+            if (selectedGroup != null) {
+                GroupHeader(selectedGroup, onBack)
+                TrackList(tracks.filter { browseMode.matches(it, selectedGroup) }, rootUri, onTrack)
+            } else if (browseMode == BrowseMode.Songs) {
+                TrackList(tracks, rootUri, onTrack)
+            } else {
+                GroupList(browseMode.groups(tracks), onGroup)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyLibrary(onChooseVolume: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Icon(Icons.Default.Storage, null, modifier = Modifier.padding(22.dp).size(42.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(Modifier.height(20.dp))
+        Text("Connect your iPod", style = MaterialTheme.typography.headlineMedium)
+        Text("Choose its mounted storage volume to bring your music into PodFS.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(22.dp))
+        Button(onClick = onChooseVolume) {
+            Icon(Icons.Default.FolderOpen, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Choose iPod volume")
+        }
+    }
+}
+
+@Composable
+private fun BrowseSelector(selected: BrowseMode, onSelected: (BrowseMode) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BrowseMode.entries.forEach { mode ->
+            Surface(
+                modifier = Modifier.weight(1f).clickable { onSelected(mode) },
+                shape = RoundedCornerShape(10.dp),
+                color = if (selected == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 10.dp)) {
+                    Icon(mode.icon, null, tint = if (selected == mode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(mode.label, style = MaterialTheme.typography.labelSmall, color = if (selected == mode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupHeader(title: String, onBack: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+        Text(title, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun GroupList(groups: List<String>, onGroup: (String) -> Unit) {
+    LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(groups) { group ->
+            Row(modifier = Modifier.fillMaxWidth().clickable { onGroup(group) }.padding(horizontal = 12.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(group, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackList(tracks: List<IpodTrack>, rootUri: Uri?, onTrack: (IpodTrack) -> Unit) {
+    LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(tracks, key = { it.path }) { track ->
+            TrackRow(track, rootUri, onTrack)
+        }
+    }
+}
+
+@Composable
+private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var artwork by remember(track) { mutableStateOf<Artwork?>(track.artwork) }
+    LaunchedEffect(track.trackId, rootUri) {
+        if (artwork == null && rootUri != null) {
+            artwork = withContext(Dispatchers.IO) {
+                IpodScanner.loadArtwork(context, rootUri, track)
+            }
+        }
+    }
+    Row(modifier = Modifier.fillMaxWidth().clickable { onTrack(track) }.padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        ArtworkThumb(artwork)
+                Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(listOf(track.artist, track.album).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { "MP3 track" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun ArtworkThumb(artwork: Artwork?) {
+    if (artwork == null) {
+        Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(10.dp).size(22.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        return
+    }
+    val bitmap = remember(artwork) {
+        val colors = IntArray(artwork.width * artwork.height)
+        for (index in colors.indices) {
+            val offset = index * 3
+            colors[index] = AndroidColor.rgb(artwork.rgb[offset].toInt() and 0xff,
+                artwork.rgb[offset + 1].toInt() and 0xff, artwork.rgb[offset + 2].toInt() and 0xff)
+        }
+        Bitmap.createBitmap(colors, artwork.width, artwork.height, Bitmap.Config.RGB_565)
+    }
+    Image(bitmap.asImageBitmap(), "Album artwork", modifier = Modifier.size(42.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+}
+
+@Composable
+private fun MiniPlayer(track: IpodTrack, isPlaying: Boolean, onOpen: () -> Unit) {
+    Surface(modifier = Modifier.fillMaxWidth().clickable { onOpen() }, color = MaterialTheme.colorScheme.surfaceVariant) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.primary) {
+                Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(7.dp).size(20.dp), tint = MaterialTheme.colorScheme.onPrimary)
+            }
+            Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(track.artist.ifEmpty { "Now playing from iPod" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            }
+            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onStop: () -> Unit, onBrowse: () -> Unit) {
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(32.dp))
+        Surface(modifier = Modifier.size(270.dp), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, modifier = Modifier.size(90.dp), tint = MaterialTheme.colorScheme.primary) }
+        }
+        Spacer(Modifier.height(28.dp))
+        Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(28.dp))
+        Surface(modifier = Modifier.fillMaxWidth().height(4.dp), color = MaterialTheme.colorScheme.surfaceVariant) {}
+        Spacer(Modifier.height(24.dp))
+        if (track != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "Previous") }
+                IconButton(onClick = onToggle, modifier = Modifier.size(64.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(32.dp))) {
+                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(30.dp))
+                }
+                IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "Next") }
+                IconButton(onClick = onStop) { Icon(Icons.Default.Stop, "Stop") }
+            }
+        } else {
+            Button(onClick = onBrowse) { Text("Browse library") }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit) {
+    LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        item {
+            Text("Settings", style = MaterialTheme.typography.headlineMedium)
+            Text("PodFS device and diagnostics", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item { SettingSection("SOURCE", Icons.Default.Usb) {
+            SettingRow("iPod volume", if (savedVolume) "Remembered" else "Not selected", Icons.Default.Storage)
+            Button(onClick = onChooseVolume, modifier = Modifier.fillMaxWidth()) { Text("Choose another volume") }
+            if (savedVolume) Text("The selected volume is scanned automatically when PodFS opens.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            if (savedVolume) Text("Forget remembered volume", color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { onClearVolume }.padding(vertical = 8.dp))
+        } }
+        item { SettingSection("ABOUT", Icons.Default.Info) {
+            SettingRow("PodFS", "iPod Classic music player", Icons.Default.Headphones)
+            SettingRow("Version", "0.1 development build", Icons.Default.Info)
+            Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        } }
+        item { SettingSection("DEBUG LOG", Icons.Default.BugReport) {
+            activityLog.forEach { entry -> Text(entry, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp)) }
+        } }
+    }
+}
+
+@Composable
+private fun SettingSection(title: String, icon: ImageVector, content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        }
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+        }
+    }
+}
+
+@Composable
+private fun SettingRow(title: String, value: String, icon: ImageVector) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Column(modifier = Modifier.padding(start = 12.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun BrowseMode.groups(tracks: List<IpodTrack>): List<String> = when (this) {
+    BrowseMode.Artists -> tracks.map { it.artist.ifEmpty { "Unknown Artist" } }
+    BrowseMode.Albums -> tracks.map { it.album.ifEmpty { "Unknown Album" } }
+    BrowseMode.Songs -> emptyList()
+}.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+
+private fun BrowseMode.matches(track: IpodTrack, group: String): Boolean = when (this) {
+    BrowseMode.Artists -> track.artist.ifEmpty { "Unknown Artist" } == group
+    BrowseMode.Albums -> track.album.ifEmpty { "Unknown Album" } == group
+    BrowseMode.Songs -> true
+}
