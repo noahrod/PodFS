@@ -31,8 +31,8 @@ The project contains a working first vertical slice:
   it. Playback keeps a queue based on the current track list and supports
   previous, next, automatic advancement, and stop.
 - AndroidX MediaCompat publishes the current title, artist, album, playback
-  state, and transport controls to Android's media notification and lock-screen
-  controls.
+  state, album artwork, and transport controls to Android's media notification
+  and lock-screen controls.
 - A persistent metadata cache avoids reparsing an unchanged `iTunesDB` on later
   scans of the same selected volume.
 - Scanning and parsing are read-only.
@@ -49,7 +49,8 @@ artwork. The current scope is deliberately narrow:
 - Standard mounted USB storage only.
 - Sixth-generation iPod Classic layout as the primary target.
 - MP3 playback only.
-- Explicit scan action rather than automatic scanning.
+- Scan after volume selection and automatically when a remembered volume is
+  restored.
 - Read-only access; no editing, syncing, deleting, or writing to the iPod.
 - iPod-like music browsing currently includes Songs, Artists, and Albums, with
   drill-down from an artist or album to its songs.
@@ -109,7 +110,7 @@ MainActivity.kt
   -> Compose track list
   -> ArtworkDB lazy artwork loading
   -> queue-aware MediaPlayer playback
-  -> MediaSessionCompat notification metadata and controls
+  -> MediaSessionCompat notification metadata, artwork, and controls
 ```
 
 ### UI
@@ -143,7 +144,8 @@ MainActivity.kt
   range for a visible track.
 9. Falls back to recursive MP3 discovery when database-backed scanning returns
    no tracks.
-10. Sorts the result by title, case-insensitively.
+10. Sorts the main library result by title, case-insensitively. Album drill-down
+  uses the iPod database track number, with unknown numbers afterward.
 
 The scanner deliberately does not load artwork during the initial scan. This
 was removed after testing showed that opening and decoding artwork for thousands
@@ -200,6 +202,8 @@ prototype:
 - nested MHOD type `3` provides the iTHMB shard filename/path;
 - format ID `1060` is treated as classic little-endian RGB565;
 - the scanner reads only the referenced byte range;
+- bounded recovery handles the supplied ArtworkDB's `mhii`/`mhni` alignment
+  gaps without weakening normal chunk validation;
 - unsupported formats and invalid ranges produce no cover rather than failing
   the music scan.
 
@@ -212,9 +216,10 @@ iPod generation.
 ### Playback and Android controls
 
 `MainActivity.kt` uses AndroidX `MediaSessionCompat` around the existing
-`MediaPlayer`. The session exposes title, artist, album, play/pause, previous,
-next, and stop actions. A media-style notification is updated while a track is
-active. The current implementation is process-bound; a future
+`MediaPlayer`. The session exposes title, artist, album, album artwork,
+play/pause, previous, next, and stop actions. Artwork is loaded asynchronously
+from ArtworkDB and supplied both as session metadata and as the notification's
+large icon. The current implementation is process-bound; a future
 `MediaSessionService`/foreground-service migration is still needed for fully
 reliable playback after the app process is reclaimed.
 
@@ -245,7 +250,7 @@ PodFS/
           ItunesDbParser.java       Read-only iTunesDB parser
         ui/theme/                   Starter Material 3 theme files
       res/                          Android resources
-    src/test/                       Parser tests, including copied iTunesDB fixture
+    src/test/                       Parser tests for iTunesDB and ArtworkDB fixtures
     src/androidTest/                Starter instrumentation-test location
 ```
 
@@ -286,15 +291,17 @@ Run the existing unit-test and instrumentation-test tasks with:
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-The repository contains a parser test for the copied database at
-`example/iTunes/iTunes/iTunesDB`. There are no synthetic ArtworkDB fixtures
-yet, and no automated test covers scanning through an Android `DocumentFile`
+The repository contains parser tests for the copied databases at
+`example/iTunes/iTunes/iTunesDB` and `example/Artwork/ArtworkDB`. The ArtworkDB
+test also reads the referenced `F1060_1.ithmb` byte range and decodes it as
+RGB565. No automated test covers scanning through an Android `DocumentFile`
 volume.
 
 ## Known Limitations
 
 - No raw USB host support; the device must already be mounted by Android.
-- No automatic volume detection or remembered selected volume UI.
+- No automatic volume detection; the selected volume URI is remembered and
+  restored when the app opens.
 - No full iTunesDB parser parity with iOpenPod; the parser supports the supplied
   fixture layout and a conservative subset of other layouts.
 - No support for iTunesCDB or other database variants.
@@ -307,13 +314,16 @@ volume.
   process-independent foreground media service.
 - Artwork support is limited to the currently recognized RGB565 format and
   requires a resolvable ArtworkDB relationship. Visible rows load artwork
-  lazily; a persistent thumbnail cache is not implemented yet.
+  lazily, and the player/notification loads the active track's artwork lazily;
+  a persistent thumbnail cache is not implemented yet.
 - The metadata cache skips unchanged database parsing, but it is not yet a true
   per-track or per-file delta index. Changes to the iPod should invalidate the
   database fingerprint naturally, after which the database is parsed again.
 - PhotosDB is not read.
 - No write operations are implemented or intended in the current scope.
-- No real sixth-generation iPod fixture/device test is checked into the project.
+- No automated scan test runs against a complete mounted sixth-generation iPod
+  `DocumentFile` volume; the checked-in iTunesDB and ArtworkDB fixtures cover
+  parser-level validation.
 - `LICENSE` currently contains a GPL-3.0 notice and link, not the full license
   text.
 
@@ -340,7 +350,8 @@ deliberately changed:
 The next useful implementation steps are:
 
 1. Add synthetic unit fixtures for valid and malformed iTunesDB chunks.
-2. Add synthetic ArtworkDB/iTHMB fixtures and verify track-to-cover mapping.
+2. Add malformed ArtworkDB/iTHMB cases and verify additional track-to-cover
+  mappings and format variants.
 3. Confirm RGB565 dimensions, row stride, and format variants against real
    sixth-generation device data.
 4. Move artwork decoding and caching toward an efficient thumbnail pipeline.
@@ -377,3 +388,7 @@ PodFS also uses [Jetpack Compose](https://github.com/androidx/androidx),
 Those libraries remain subject to their own licenses. Inspiration and
 dependencies are credited here separately from code that may be copied or
 ported.
+
+### Author
+
+PodFS is authored by **Noe Rodriguez**. GitHub: [github.com/noah](https://github.com/noah).

@@ -14,8 +14,69 @@ public final class ArtworkDbParser {
     @NonNull
     public static Map<Long, Location> index(@NonNull byte[] data) {
         Map<Long, Location> locations = new HashMap<>();
-        scan(data, 0, data.length, locations);
+        try {
+            scan(data, 0, data.length, locations);
+        } catch (IllegalArgumentException ignored) {
+            locations.clear();
+        }
+        if (locations.isEmpty()) {
+            scanLooseImages(data, locations);
+        }
         return locations;
+    }
+
+    private static void scanLooseImages(byte[] data, Map<Long, Location> result) {
+        for (int offset = 0; offset + 12 <= data.length; offset++) {
+            if (!marker(data, offset, "mhii")) {
+                continue;
+            }
+            long headerLength = uint32(data, offset + 4);
+            long length = uint32(data, offset + 8);
+            if (headerLength < 52 || length < headerLength || length > data.length - offset) {
+                continue;
+            }
+            long trackId = uint64(data, offset + 0x14);
+            int childStart = offset + (int) headerLength;
+            Location location = null;
+            try {
+                location = findLocation(data, childStart, offset + (int) length);
+                if (location == null && childStart >= offset + 8
+                        && marker(data, childStart - 8, "mhod")) {
+                    location = findLocation(data, childStart - 8, offset + (int) length);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Continue searching for the next independently bounded mhii.
+            }
+            if (location == null) {
+                location = findLooseLocation(data, childStart, offset + (int) length);
+            }
+            if (trackId != 0 && location != null) {
+                result.put(trackId, location);
+            }
+        }
+    }
+
+    private static Location findLooseLocation(byte[] data, int start, int limit) {
+        for (int offset = start; offset + 44 <= limit; offset++) {
+            if (!marker(data, offset, "mhni")) {
+                continue;
+            }
+            long headerLength = uint32(data, offset + 4);
+            long length = uint32(data, offset + 8);
+            if (headerLength < 44 || length < headerLength || length > limit - offset) {
+                continue;
+            }
+            int formatId = (int) uint32(data, offset + 0x10);
+            long imageOffset = uint32(data, offset + 0x14);
+            long imageSize = uint32(data, offset + 0x18);
+            int width = uint16(data, offset + 0x22);
+            int height = uint16(data, offset + 0x20);
+            String path = findPath(data, offset + (int) headerLength, offset + (int) length);
+            if (formatId == 1060 && imageSize > 0 && width > 0 && height > 0 && path != null) {
+                return new Location(path, imageOffset, imageSize, width, height);
+            }
+        }
+        return null;
     }
 
     private static void scan(byte[] data, int start, int limit, Map<Long, Location> result) {
@@ -29,7 +90,12 @@ public final class ArtworkDbParser {
             int end = offset + (int) length;
             if (marker(data, offset, "mhii") && headerLength >= 52) {
                 long trackId = uint64(data, offset + 0x14);
-                Location location = findLocation(data, offset + (int) headerLength, end);
+                int childStart = offset + (int) headerLength;
+                Location location = findLocation(data, childStart, end);
+                if (location == null && childStart >= offset + 8
+                        && marker(data, childStart - 8, "mhod")) {
+                    location = findLocation(data, childStart - 8, end);
+                }
                 if (trackId != 0 && location != null) {
                     result.put(trackId, location);
                 }

@@ -737,10 +737,10 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
             SettingRow("Version", "0.1 development build", Icons.Default.Info)
             SettingRow("Author", "Noe Rodriguez", Icons.Default.Person)
             Text(
-                "github.com/noah",
+                "github.com/noahrod",
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clickable {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/noah")))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/noahrod")))
                 }
             )
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
