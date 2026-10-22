@@ -23,10 +23,16 @@ The project contains a working first vertical slice:
   tree.
 - If the database is missing, malformed, unsupported, or produces no resolved
   tracks, PodFS recursively scans `iPod_Control/Music` for `.mp3` files.
-- The UI provides Songs, Artists, and Albums browse modes.
+- The UI provides Songs, Artists, Albums, and Playlists browse modes.
+- Playlists come from iTunesDB `mhyp` records and open into their songs.
+- Shuffle plays the current songs, group, or playlist in random order.
+- A Settings tab shows a timestamped activity log of scan stages, browsing,
+  and playback events.
 - Artists and albums open into their associated songs.
 - The UI displays title, artist, album metadata, and lazily loaded artwork from
   ArtworkDB/iTHMB when the relevant track row becomes visible.
+- Every track of an album shows the album cover, even though ArtworkDB links
+  one track per album.
 - Tapping a track starts playback. Tapping the playing track pauses or resumes
   it. Playback keeps a queue based on the current track list and supports
   previous, next, automatic advancement, and stop.
@@ -52,8 +58,8 @@ artwork. The current scope is deliberately narrow:
 - Scan after volume selection and automatically when a remembered volume is
   restored.
 - Read-only access; no editing, syncing, deleting, or writing to the iPod.
-- iPod-like music browsing currently includes Songs, Artists, and Albums, with
-  drill-down from an artist or album to its songs.
+- iPod-like music browsing currently includes Songs, Artists, Albums, and
+  Playlists, with drill-down from an artist, album, or playlist to its songs.
 
 ## User Flow
 
@@ -64,10 +70,11 @@ artwork. The current scope is deliberately narrow:
 5. PodFS scans on a background coroutine. The UI activity log records scan
   start, completion/failure, and elapsed time.
 6. If the volume looks like an iPod, the Songs browse mode is shown.
-7. Choose Artists or Albums to browse groups, then select a group to see its
-  songs.
+7. Choose Artists, Albums, or Playlists to browse groups, then select a group
+  to see its songs. Shuffle plays them in random order.
 8. Tap a track to play or pause it. Use the Now Playing screen or Android's
   media notification for previous, next, pause, and stop.
+9. Open the Settings tab to read the debug log.
 
 The selected URI is passed to `DocumentFile.fromTreeUri`. The app does not
 assume a filesystem path and does not use direct `java.io.File` access for the
@@ -120,8 +127,9 @@ MainActivity.kt
 - launches `OpenDocumentTree`;
 - takes persistable read permission;
 - launches scanning on `Dispatchers.IO`;
-- displays scan status and Songs, Artists, and Albums browse modes;
-- displays the latest 12 activity-log entries, including scan duration;
+- displays scan status and Songs, Artists, Albums, and Playlists browse modes;
+- shows the Settings tab with the latest 500 activity-log entries, newest first,
+  including scan stages and duration;
 - owns the queue-aware `MediaPlayer` controller and media session;
 - publishes playback metadata and notification actions to Android;
 - converts decoded artwork RGB bytes into an Android `Bitmap` for display.
@@ -146,6 +154,8 @@ MainActivity.kt
    no tracks.
 10. Sorts the main library result by title, case-insensitively. Album drill-down
   uses the iPod database track number, with unknown numbers afterward.
+11. Reports each stage (volume check, cache, iTunesDB, ArtworkDB, filename
+  fallback) to the activity log through a progress callback.
 
 The scanner deliberately does not load artwork during the initial scan. This
 was removed after testing showed that opening and decoding artwork for thousands
@@ -156,10 +166,13 @@ artwork is discarded, and the scanner continues where possible.
 
 ### Models
 
-- `IpodScanResult` contains `looksLikeIpod`, an immutable track list, and a
-  user-facing status message.
-- `IpodTrack` contains the iTunes track ID, title, artist, album, resolved media
-  URI/path, and optional `Artwork`.
+- `IpodScanResult` contains `looksLikeIpod`, an immutable track list, playlists,
+  and a user-facing status message.
+- `IpodTrack` contains the iTunes track ID, the 64-bit dbid used for the artwork
+  join, track number, title, artist, album, resolved media URI/path, and
+  optional `Artwork`.
+- `IpodPlaylist` contains a name, playlist ID, and ordered track IDs from one
+  `mhyp` record.
 - `Artwork` contains width, height, and decoded packed RGB bytes.
 - `ArtworkDbParser.Location` contains an iTHMB path, byte offset, byte size,
   width, and height.
@@ -184,7 +197,8 @@ chunk format:
 - supports UTF-16LE and UTF-8 metadata strings;
 - supports the fixture's metadata IDs `200` (title), `201` (artist), and `202`
   (album), in addition to the older `1`-`4` mapping;
-- extracts the track ID used to associate artwork.
+- extracts the 64-bit dbid at `+0x70`, used to associate artwork;
+- reads `mhyp` playlist records and skips the master playlist.
 
 The parser respects the declared length of the root `mhbd` chunk instead of
 requiring the entire physical file to be part of that chunk. It also handles
@@ -206,6 +220,11 @@ prototype:
   gaps without weakening normal chunk validation;
 - unsupported formats and invalid ranges produce no cover rather than failing
   the music scan.
+
+Artwork is linked per album. ArtworkDB has one `mhii` per album, so
+`IpodScanner.linkAlbumArtwork` gives every track the cover of its album. It
+matches by album and artist first, then by album alone when that album title
+has only one artist.
 
 The decoded artwork is kept in memory as RGB bytes and converted to a Compose
 image in the track row. Artwork loading is intentionally lazy so a large
@@ -246,6 +265,7 @@ PodFS/
         library/
           Artwork.java              Decoded artwork model
           ArtworkDbParser.java      ArtworkDB index and RGB565 decoder
+          IpodPlaylist.java         Playlist model
           IpodScanResult.java       Scan result model
           IpodScanner.java          SAF traversal and scan orchestration
           IpodTrack.java            Track model
@@ -294,9 +314,10 @@ Run the existing unit-test and instrumentation-test tasks with:
 ```
 
 The repository contains parser tests for the copied databases at
-`example/iTunes/iTunes/iTunesDB` and `example/Artwork/ArtworkDB`. The ArtworkDB
-test also reads the referenced `F1060_1.ithmb` byte range and decodes it as
-RGB565. No automated test covers scanning through an Android `DocumentFile`
+`example/iPod_Control/iTunes/iTunesDB` and
+`example/iPod_Control/Artwork/ArtworkDB`. The ArtworkDB test also reads the
+referenced `F1060_1.ithmb` byte range and decodes it as RGB565. The fixture
+tests also check that one album cover reaches every track of its album. No automated test covers scanning through an Android `DocumentFile`
 volume.
 
 ## GitHub Releases
@@ -322,7 +343,8 @@ does not create a signed production release APK.
 - MP3 is the only media type accepted from database-backed results.
 - Fallback-discovered tracks have filename-derived titles and no artist/album
   metadata.
-- Playlists and the complete hierarchical iPod menu are not implemented yet.
+- The complete hierarchical iPod menu is not implemented. Playlists cover only
+  the `mhyp` records read from iTunesDB.
 - Playback has queue navigation, notification controls, and automatic
   completion advancement, but still lacks seeking, audio focus policy, and a
   process-independent foreground media service.
@@ -372,7 +394,7 @@ The next useful implementation steps are:
 5. Add a true per-file/per-track delta index with validation of cached media
   URIs before reusing cached metadata.
 6. Add a foreground `MediaSessionService`, audio focus handling, and seeking.
-7. Add playlist browsing and the remaining hierarchical iPod menus.
+7. Add the remaining hierarchical iPod menus.
 8. Decide whether PhotosDB support is in scope.
 9. Expand parser coverage toward the relevant iOpenPod formats while keeping
    attribution and GPL obligations clear.

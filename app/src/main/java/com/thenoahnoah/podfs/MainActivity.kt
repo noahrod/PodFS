@@ -2,6 +2,7 @@ package com.thenoahnoah.podfs
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
@@ -100,6 +101,9 @@ import com.thenoahnoah.podfs.ui.theme.PodFSTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
@@ -152,6 +156,7 @@ private class PlaybackController(
         queue = tracks
         this.rootUri = rootUri
         index = queue.indexOfFirst { it.path == track.path }.takeIf { it >= 0 } ?: 0
+        onLog("Queue: ${queue.size} tracks.")
         openCurrent()
     }
 
@@ -165,11 +170,22 @@ private class PlaybackController(
         if (index > 0) { index--; openCurrent() }
     }
 
-    fun pause() { player?.pause(); isPlaying = false; publishState() }
+    fun pause() {
+        player?.pause()
+        isPlaying = false
+        publishState()
+        current?.let { onLog("Paused: ${it.title}") }
+    }
 
-    fun resume() { player?.start(); isPlaying = player != null; publishState() }
+    fun resume() {
+        player?.start()
+        isPlaying = player != null
+        publishState()
+        if (player != null) current?.let { onLog("Resumed: ${it.title}") }
+    }
 
     fun stop() {
+        current?.let { onLog("Stopped: ${it.title}") }
         player?.stop()
         player?.release()
         player = null
@@ -191,13 +207,14 @@ private class PlaybackController(
         player?.release()
         player = try { MediaPlayer.create(context, Uri.parse(track.path)) } catch (_: RuntimeException) { null }
         if (player == null) {
-            onLog("Playback could not open: ${track.title}")
+            onLog("Playback could not open: ${track.title} (${track.path})")
             onStateChanged(null, false)
             return
         }
         current = track
         currentArtwork = null
         player?.setOnCompletionListener {
+            onLog("Finished: ${track.title}")
             if (index < queue.lastIndex) { index++; openCurrent() } else pause()
         }
         player?.start()
@@ -311,7 +328,8 @@ private fun PodFsApp() {
     }
 
     fun log(message: String) {
-        activityLog = (activityLog + message).takeLast(20)
+        val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        activityLog = (activityLog + "$time  $message").takeLast(500)
     }
 
     val playback = remember {
@@ -327,7 +345,9 @@ private fun PodFsApp() {
         scope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             try {
-                scanResult = withContext(Dispatchers.IO) { IpodScanner.scan(context, uri) }
+                scanResult = withContext(Dispatchers.IO) {
+                    IpodScanner.scan(context, uri) { message -> scope.launch { log(message) } }
+                }
                 val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1000.0
                 log("Scan complete in ${"%.1f".format(seconds)}s: ${scanResult?.message}")
             } catch (error: Exception) {
@@ -351,6 +371,7 @@ private fun PodFsApp() {
 
     fun playShuffled(tracks: List<IpodTrack>) {
         if (tracks.isEmpty()) return
+        log("Shuffle started.")
         val shuffled = tracks.shuffled()
         playback.play(shuffled.first(), shuffled, selectedVolumeUri)
         selectedTab = AppTab.NowPlaying
@@ -360,9 +381,22 @@ private fun PodFsApp() {
         if (uri != null) {
             preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
             selectedVolumeUri = uri
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                log("This storage does not keep access after restart.")
+            }
             log("Selected storage volume.")
             scanVolume(uri)
+        }
+    }
+
+    fun openVolumePicker() {
+        log("Opening volume picker.")
+        try {
+            picker.launch(null)
+        } catch (_: ActivityNotFoundException) {
+            log("This device has no folder picker.")
         }
     }
 
@@ -407,7 +441,7 @@ private fun PodFsApp() {
                 },
                 actions = {
                     if (selectedTab == AppTab.Library) {
-                        IconButton(onClick = { picker.launch(null) }, enabled = !isScanning) {
+                        IconButton(onClick = ::openVolumePicker, enabled = !isScanning) {
                             Icon(Icons.Default.Usb, "Choose iPod volume")
                         }
                     }
@@ -429,7 +463,7 @@ private fun PodFsApp() {
                     AppTab.entries.forEach { tab ->
                         NavigationBarItem(
                             selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
+                            onClick = { selectedTab = tab; log("Tab: ${tab.label}") },
                             icon = { Icon(tab.icon, tab.label) },
                             label = { Text(tab.label) }
                         )
@@ -446,10 +480,10 @@ private fun PodFsApp() {
                 isScanning = isScanning,
                 browseMode = browseMode,
                 selectedGroup = selectedGroup,
-                onBrowseMode = { browseMode = it; selectedGroup = null },
-                onGroup = { selectedGroup = it },
-                onBack = { selectedGroup = null },
-                onChooseVolume = { picker.launch(null) },
+                onBrowseMode = { browseMode = it; selectedGroup = null; log("Browse: ${it.label}") },
+                onGroup = { selectedGroup = it; log("Opened: $it") },
+                onBack = { selectedGroup = null; log("Back to ${browseMode.label}") },
+                onChooseVolume = ::openVolumePicker,
                 onTrack = ::togglePlayback,
                 onShuffle = ::playShuffled
             )
@@ -468,7 +502,7 @@ private fun PodFsApp() {
                 modifier = Modifier.padding(padding),
                 activityLog = activityLog,
                 savedVolume = preferences.getString("selected_volume_uri", null) != null,
-                onChooseVolume = { picker.launch(null) },
+                onChooseVolume = ::openVolumePicker,
                 onClearVolume = {
                     preferences.edit().remove("selected_volume_uri").apply()
                     scanResult = null
@@ -810,7 +844,7 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         } }
         item { SettingSection("DEBUG LOG", Icons.Default.BugReport) {
-            activityLog.forEach { entry -> Text(entry, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp)) }
+            activityLog.asReversed().forEach { entry -> Text(entry, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp)) }
         } }
     }
 }

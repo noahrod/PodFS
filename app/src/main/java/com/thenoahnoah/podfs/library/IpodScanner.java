@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -46,7 +47,8 @@ public final class IpodScanner {
     }
 
     @NonNull
-    public static IpodScanResult scan(@NonNull Context context, @NonNull Uri rootUri) {
+    public static IpodScanResult scan(@NonNull Context context, @NonNull Uri rootUri,
+                                      @NonNull Consumer<String> progress) {
         DocumentFile root = DocumentFile.fromTreeUri(context, rootUri);
         if (root == null || !root.isDirectory()) {
             return new IpodScanResult(false, List.of(), "The selected location is not a directory.");
@@ -58,11 +60,16 @@ public final class IpodScanner {
             return new IpodScanResult(false, List.of(),
                     "This volume does not look like an iPod Classic.");
         }
+        progress.accept("Found iPod_Control and Music folders.");
 
         DocumentFile database = childFile(root, "iPod_Control/iTunes/iTunesDB");
         LibraryData library = readCachedLibrary(context, rootUri, database);
+        if (library != null) {
+            progress.accept("Cached metadata: " + library.tracks.size() + " tracks, "
+                    + library.playlists.size() + " playlists.");
+        }
         if (library == null || library.tracks.isEmpty()) {
-            library = readDatabase(context, root);
+            library = readDatabase(context, root, progress);
             writeCachedLibrary(context, rootUri, database, library);
         }
         List<IpodTrack> tracks = new ArrayList<>(library.tracks);
@@ -70,10 +77,16 @@ public final class IpodScanner {
         Map<Long, ArtworkDbParser.Location> artwork = usedFallback ? null
                 : cachedArtworkIndex(context, rootUri, root);
         if (artwork != null) {
+            progress.accept("ArtworkDB: " + artwork.size() + " cover entries.");
             tracks = linkAlbumArtwork(tracks, artwork);
+            progress.accept("Covers linked: " + countWithArtwork(tracks) + " of " + tracks.size() + " tracks.");
+        } else if (!usedFallback) {
+            progress.accept("No ArtworkDB covers available.");
         }
         if (tracks.isEmpty()) {
+            progress.accept("Scanning iPod_Control/Music for MP3 files.");
             collectMp3s(childDirectory(root, "iPod_Control/Music"), tracks);
+            progress.accept("Filename scan found " + tracks.size() + " MP3 files.");
         }
         tracks.sort(Comparator.comparing(IpodTrack::getTitle, String.CASE_INSENSITIVE_ORDER));
         String message;
@@ -175,18 +188,22 @@ public final class IpodScanner {
 
     @NonNull
     private static LibraryData readDatabase(@NonNull Context context,
-                                            @NonNull DocumentFile root) {
+                                            @NonNull DocumentFile root,
+                                            @NonNull Consumer<String> progress) {
         DocumentFile database = childFile(root, "iPod_Control/iTunes/iTunesDB");
         if (database == null) {
+            progress.accept("No iTunesDB file found.");
             return LibraryData.empty();
         }
         try (InputStream input = context.getContentResolver().openInputStream(database.getUri())) {
             if (input == null) {
+                progress.accept("iTunesDB could not be opened.");
                 return LibraryData.empty();
             }
             byte[] data = readAll(input);
             List<IpodTrack> parsed = ItunesDbParser.parse(data);
             List<IpodPlaylist> playlists = ItunesDbParser.parsePlaylists(data);
+            progress.accept("iTunesDB parsed: " + parsed.size() + " tracks, " + playlists.size() + " playlists.");
             Map<String, Map<String, DocumentFile>> directoryCache = new HashMap<>();
             List<IpodTrack> resolved = new ArrayList<>();
             for (IpodTrack track : parsed) {
@@ -200,10 +217,22 @@ public final class IpodScanner {
                         track.getTitle(), track.getArtist(), track.getAlbum(), media.getUri().toString(), null));
                 }
             }
+            progress.accept("Resolved to files: " + resolved.size() + " of " + parsed.size() + " tracks.");
             return new LibraryData(resolved, playlists);
-        } catch (IOException | IllegalArgumentException ignored) {
+        } catch (IOException | IllegalArgumentException error) {
+            progress.accept("iTunesDB could not be read: " + error.getMessage());
             return LibraryData.empty();
         }
+    }
+
+    private static int countWithArtwork(@NonNull List<IpodTrack> tracks) {
+        int count = 0;
+        for (IpodTrack track : tracks) {
+            if (track.getArtworkDbId() != 0) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public static Artwork loadArtwork(@NonNull Context context, @NonNull Uri rootUri,
