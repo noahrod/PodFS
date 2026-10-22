@@ -232,6 +232,8 @@ vertical slice.
 
 ```text
 PodFS/
+  .github/workflows/
+    release.yml                    Manual APK release workflow
   build.gradle.kts                 Root Gradle configuration
   settings.gradle.kts              Project and repository settings
   gradle/libs.versions.toml        Dependency and plugin versions
@@ -296,6 +298,18 @@ The repository contains parser tests for the copied databases at
 test also reads the referenced `F1060_1.ithmb` byte range and decodes it as
 RGB565. No automated test covers scanning through an Android `DocumentFile`
 volume.
+
+## GitHub Releases
+
+The **Create release** GitHub Actions workflow can be started manually from
+the repository's **Actions** tab. Choose **Run workflow** and provide a release
+tag, such as `v1.0.0`; the release title is optional and defaults to
+`PodFS release`.
+
+The workflow builds the installable debug APK with `:app:assembleDebug`, then
+creates a GitHub release for the supplied tag with automatically generated
+release notes. The APK is attached to the release as `PodFS.apk`. This workflow
+does not create a signed production release APK.
 
 ## Known Limitations
 
