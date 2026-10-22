@@ -151,7 +151,8 @@ public final class ItunesDbParser {
             path = "";
         }
         long trackId = headerLength >= 0x14 ? uint32(data, offset + 0x10) : 0;
-        return new IpodTrack(trackId, title.isEmpty() ? "Untitled" : title,
+        int trackNumber = headerLength >= 0x18 ? (int) uint32(data, offset + 0x14) : 0;
+        return new IpodTrack(trackId, trackNumber, title.isEmpty() ? "Untitled" : title,
             artist, album, path, null);
     }
 

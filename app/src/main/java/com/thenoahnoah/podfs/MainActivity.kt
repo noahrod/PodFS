@@ -98,6 +98,7 @@ import com.thenoahnoah.podfs.ui.theme.PodFSTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,6 +121,7 @@ private class PlaybackController(
     private val onLog: (String) -> Unit
 ) {
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
+    private val artworkExecutor = Executors.newSingleThreadExecutor()
     private val session = MediaSessionCompat(context, "PodFS").apply {
         setCallback(object : MediaSessionCompat.Callback() {
             override fun onPlay() = resume()
@@ -134,6 +136,8 @@ private class PlaybackController(
     private var queue = emptyList<IpodTrack>()
     private var index = -1
     private var current: IpodTrack? = null
+    private var rootUri: Uri? = null
+    private var currentArtwork: Bitmap? = null
     private var isPlaying = false
 
     init {
@@ -142,41 +146,26 @@ private class PlaybackController(
         }
     }
 
-    fun play(track: IpodTrack, tracks: List<IpodTrack>) {
+    fun play(track: IpodTrack, tracks: List<IpodTrack>, rootUri: Uri?) {
         queue = tracks
+        this.rootUri = rootUri
         index = queue.indexOfFirst { it.path == track.path }.takeIf { it >= 0 } ?: 0
         openCurrent()
     }
 
-    fun toggle() {
-        if (player?.isPlaying == true) pause() else resume()
-    }
+    fun toggle() { if (player?.isPlaying == true) pause() else resume() }
 
     fun next() {
-        if (queue.isNotEmpty() && index < queue.lastIndex) {
-            index++
-            openCurrent()
-        }
+        if (index < queue.lastIndex) { index++; openCurrent() }
     }
 
     fun previous() {
-        if (queue.isNotEmpty() && index > 0) {
-            index--
-            openCurrent()
-        }
+        if (index > 0) { index--; openCurrent() }
     }
 
-    fun pause() {
-        player?.pause()
-        isPlaying = false
-        publishState()
-    }
+    fun pause() { player?.pause(); isPlaying = false; publishState() }
 
-    fun resume() {
-        player?.start()
-        isPlaying = player != null
-        publishState()
-    }
+    fun resume() { player?.start(); isPlaying = player != null; publishState() }
 
     fun stop() {
         player?.stop()
@@ -191,6 +180,7 @@ private class PlaybackController(
 
     fun release() {
         stop()
+        artworkExecutor.shutdownNow()
         session.release()
     }
 
@@ -204,13 +194,9 @@ private class PlaybackController(
             return
         }
         current = track
+        currentArtwork = null
         player?.setOnCompletionListener {
-            if (index < queue.lastIndex) {
-                index++
-                openCurrent()
-            } else {
-                pause()
-            }
+            if (index < queue.lastIndex) { index++; openCurrent() } else pause()
         }
         player?.start()
         isPlaying = true
@@ -220,30 +206,58 @@ private class PlaybackController(
     }
 
     private fun publishState() {
-        val track = current
+        val track = current ?: return
         val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
             PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
         session.setPlaybackState(PlaybackStateCompat.Builder().setActions(actions)
-            .setState(if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED, player?.currentPosition?.toLong() ?: 0L, 1f).build())
-        if (track != null) {
-            session.setMetadata(MediaMetadataCompat.Builder().putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album).build())
-            val notification = NotificationCompat.Builder(context, "podfs_playback")
-                .setSmallIcon(com.thenoahnoah.podfs.R.drawable.ic_launcher_foreground)
-                .setContentTitle(track.title).setContentText(track.artist.ifEmpty { track.album })
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(isPlaying)
-                .setStyle(MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2))
-                .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Previous", actionIntent("previous")))
-                .addAction(NotificationCompat.Action(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (isPlaying) "Pause" else "Play", actionIntent(if (isPlaying) "pause" else "play")))
-                .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Next", actionIntent("next")))
-                .addAction(NotificationCompat.Action(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent("stop"))).build()
-            notificationManager.notify(42, notification)
-            onStateChanged(track, isPlaying)
+            .setState(if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                player?.currentPosition?.toLong() ?: 0L, 1f).build())
+        val metadata = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album).build()
+        session.setMetadata(metadata)
+        notificationManager.notify(42, buildNotification(track, isPlaying, currentArtwork))
+        onStateChanged(track, isPlaying)
+        rootUri?.let { uri ->
+            artworkExecutor.execute {
+                val artwork = IpodScanner.loadArtwork(context, uri, track)
+                if (artwork != null && current?.path == track.path) {
+                    val bitmap = artworkBitmap(artwork)
+                    currentArtwork = bitmap
+                    session.setMetadata(MediaMetadataCompat.Builder(metadata)
+                        .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+                        .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap).build())
+                    notificationManager.notify(42, buildNotification(track, isPlaying, bitmap))
+                }
+            }
         }
     }
 
-    private fun actionIntent(action: String): PendingIntent = PendingIntent.getBroadcast(context, action.hashCode(), PlaybackActionReceiver.intent(context, action), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    private fun buildNotification(track: IpodTrack, playing: Boolean, artwork: Bitmap? = null) = NotificationCompat.Builder(context, "podfs_playback")
+        .setSmallIcon(com.thenoahnoah.podfs.R.drawable.ic_launcher_foreground)
+        .setContentTitle(track.title).setContentText(track.artist.ifEmpty { track.album })
+        .setLargeIcon(artwork)
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(playing)
+        .setStyle(MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2))
+        .addAction(NotificationCompat.Action(android.R.drawable.ic_media_previous, "Previous", actionIntent("previous")))
+        .addAction(NotificationCompat.Action(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (playing) "Pause" else "Play", actionIntent(if (playing) "pause" else "play")))
+        .addAction(NotificationCompat.Action(android.R.drawable.ic_media_next, "Next", actionIntent("next")))
+        .addAction(NotificationCompat.Action(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent("stop"))).build()
+
+    private fun artworkBitmap(artwork: Artwork): Bitmap {
+        val colors = IntArray(artwork.width * artwork.height)
+        for (index in colors.indices) {
+            val offset = index * 3
+            colors[index] = AndroidColor.rgb(artwork.rgb[offset].toInt() and 0xff,
+                artwork.rgb[offset + 1].toInt() and 0xff, artwork.rgb[offset + 2].toInt() and 0xff)
+        }
+        return Bitmap.createBitmap(colors, artwork.width, artwork.height, Bitmap.Config.ARGB_8888)
+    }
+
+    private fun actionIntent(action: String): PendingIntent = PendingIntent.getBroadcast(
+        context, action.hashCode(), PlaybackActionReceiver.intent(context, action),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 }
 
 private class PlaybackActionReceiver : android.content.BroadcastReceiver() {
@@ -328,7 +342,7 @@ private fun PodFsApp() {
             playback.toggle()
             return
         }
-        playback.play(track, scanResult?.tracks.orEmpty())
+        playback.play(track, scanResult?.tracks.orEmpty(), selectedVolumeUri)
         selectedTab = AppTab.NowPlaying
     }
 
@@ -394,7 +408,7 @@ private fun PodFsApp() {
         bottomBar = {
             Column {
                 playingTrack?.let { track ->
-                    MiniPlayer(track, isPlaying) {
+                    MiniPlayer(track, selectedVolumeUri, isPlaying) {
                         selectedTab = AppTab.NowPlaying
                     }
                 }
@@ -431,6 +445,7 @@ private fun PodFsApp() {
             AppTab.NowPlaying -> NowPlayingScreen(
                 modifier = Modifier.padding(padding),
                 track = playingTrack,
+                rootUri = selectedVolumeUri,
                 isPlaying = isPlaying,
                 onToggle = { playingTrack?.let(::togglePlayback) },
                 onPrevious = playback::previous,
@@ -496,11 +511,13 @@ private fun LibraryScreen(
             BrowseSelector(browseMode, onBrowseMode)
             if (selectedGroup != null) {
                 GroupHeader(selectedGroup, onBack)
-                TrackList(tracks.filter { browseMode.matches(it, selectedGroup) }, rootUri, onTrack)
+                val groupedTracks = tracks.filter { browseMode.matches(it, selectedGroup) }
+                    .let { if (browseMode == BrowseMode.Albums) it.sortedWith(compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }) else it }
+                TrackList(groupedTracks, rootUri, onTrack)
             } else if (browseMode == BrowseMode.Songs) {
                 TrackList(tracks, rootUri, onTrack)
             } else {
-                GroupList(browseMode.groups(tracks), onGroup)
+                GroupList(browseMode, tracks, rootUri, onGroup)
             }
         }
     }
@@ -555,15 +572,39 @@ private fun GroupHeader(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun GroupList(groups: List<String>, onGroup: (String) -> Unit) {
+private fun GroupList(mode: BrowseMode, tracks: List<IpodTrack>, rootUri: Uri?, onGroup: (String) -> Unit) {
+    val groups = mode.groups(tracks)
+    val previews = if (mode == BrowseMode.Albums) {
+        tracks.groupBy { it.album.ifEmpty { "Unknown Album" } }
+            .mapValues { (_, albumTracks) -> albumTracks.first() }
+    } else {
+        emptyMap()
+    }
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         items(groups) { group ->
             Row(modifier = Modifier.fillMaxWidth().clickable { onGroup(group) }.padding(horizontal = 12.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(group, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                if (mode == BrowseMode.Albums) {
+                    AlbumArtworkPreview(previews[group], rootUri)
+                }
+                Text(group, modifier = Modifier.weight(1f).padding(start = if (mode == BrowseMode.Albums) 12.dp else 0.dp), style = MaterialTheme.typography.bodyLarge)
                 Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
             }
         }
     }
+}
+
+@Composable
+private fun AlbumArtworkPreview(track: IpodTrack?, rootUri: Uri?) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var artwork by remember(track) { mutableStateOf<Artwork?>(track?.artwork) }
+    LaunchedEffect(track?.trackId, rootUri) {
+        if (artwork == null && track != null && rootUri != null) {
+            artwork = withContext(Dispatchers.IO) {
+                IpodScanner.loadArtwork(context, rootUri, track)
+            }
+        }
+    }
+    ArtworkThumb(artwork, size = 52.dp)
 }
 
 @Composable
@@ -597,9 +638,9 @@ private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Un
 }
 
 @Composable
-private fun ArtworkThumb(artwork: Artwork?) {
+private fun ArtworkThumb(artwork: Artwork?, size: androidx.compose.ui.unit.Dp = 42.dp) {
     if (artwork == null) {
-        Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Surface(modifier = Modifier.size(size), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
             Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(10.dp).size(22.dp), tint = MaterialTheme.colorScheme.primary)
         }
         return
@@ -613,16 +654,23 @@ private fun ArtworkThumb(artwork: Artwork?) {
         }
         Bitmap.createBitmap(colors, artwork.width, artwork.height, Bitmap.Config.RGB_565)
     }
-    Image(bitmap.asImageBitmap(), "Album artwork", modifier = Modifier.size(42.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+    Image(bitmap.asImageBitmap(), "Album artwork", modifier = Modifier.size(size), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
 }
 
 @Composable
-private fun MiniPlayer(track: IpodTrack, isPlaying: Boolean, onOpen: () -> Unit) {
+private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onOpen: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var artwork by remember(track) { mutableStateOf<Artwork?>(track.artwork) }
+    LaunchedEffect(track.trackId, rootUri) {
+        if (artwork == null && rootUri != null) {
+            artwork = withContext(Dispatchers.IO) {
+                IpodScanner.loadArtwork(context, rootUri, track)
+            }
+        }
+    }
     Surface(modifier = Modifier.fillMaxWidth().clickable { onOpen() }, color = MaterialTheme.colorScheme.surfaceVariant) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.primary) {
-                Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(7.dp).size(20.dp), tint = MaterialTheme.colorScheme.onPrimary)
-            }
+            ArtworkThumb(artwork, size = 36.dp)
             Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                 Text(track.artist.ifEmpty { "Now playing from iPod" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -633,12 +681,21 @@ private fun MiniPlayer(track: IpodTrack, isPlaying: Boolean, onOpen: () -> Unit)
 }
 
 @Composable
-private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onStop: () -> Unit, onBrowse: () -> Unit) {
+private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri?, isPlaying: Boolean, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onStop: () -> Unit, onBrowse: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var artwork by remember(track) { mutableStateOf<Artwork?>(track?.artwork) }
+    LaunchedEffect(track?.trackId, rootUri) {
+        if (artwork == null && track != null && rootUri != null) {
+            artwork = withContext(Dispatchers.IO) {
+                IpodScanner.loadArtwork(context, rootUri, track)
+            }
+        }
+    }
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.height(32.dp))
         Surface(modifier = Modifier.size(270.dp), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, modifier = Modifier.size(90.dp), tint = MaterialTheme.colorScheme.primary) }
+            Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = 270.dp) }
         }
         Spacer(Modifier.height(28.dp))
         Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -663,6 +720,7 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, isPlaying: B
 
 @Composable
 private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
@@ -677,6 +735,14 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
         item { SettingSection("ABOUT", Icons.Default.Info) {
             SettingRow("PodFS", "iPod Classic music player", Icons.Default.Headphones)
             SettingRow("Version", "0.1 development build", Icons.Default.Info)
+            SettingRow("Author", "Noe Rodriguez", Icons.Default.Person)
+            Text(
+                "github.com/noah",
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/noah")))
+                }
+            )
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         } }
         item { SettingSection("DEBUG LOG", Icons.Default.BugReport) {

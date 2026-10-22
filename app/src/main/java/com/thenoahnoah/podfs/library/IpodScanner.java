@@ -20,6 +20,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class IpodScanner {
+    private static final String CACHE_VERSION = "v2:";
     private static final Map<String, Map<Long, ArtworkDbParser.Location>> ARTWORK_INDEX_CACHE =
             new ConcurrentHashMap<>();
     private IpodScanner() {
@@ -79,7 +80,7 @@ public final class IpodScanner {
             List<IpodTrack> tracks = new ArrayList<>();
             for (int index = 0; index < array.length(); index++) {
                 JSONObject item = array.getJSONObject(index);
-                tracks.add(new IpodTrack(item.getLong("id"), item.getString("title"),
+                tracks.add(new IpodTrack(item.getLong("id"), item.optInt("trackNumber", 0), item.getString("title"),
                         item.getString("artist"), item.getString("album"),
                         item.getString("path"), null));
             }
@@ -99,6 +100,7 @@ public final class IpodScanner {
             for (IpodTrack track : tracks) {
                 JSONObject item = new JSONObject();
                 item.put("id", track.getTrackId());
+                item.put("trackNumber", track.getTrackNumber());
                 item.put("title", track.getTitle());
                 item.put("artist", track.getArtist());
                 item.put("album", track.getAlbum());
@@ -114,7 +116,7 @@ public final class IpodScanner {
 
     @NonNull
     private static String cacheKey(@NonNull Uri rootUri, @NonNull DocumentFile database) {
-        return rootUri + ":" + database.length() + ":" + database.lastModified();
+        return CACHE_VERSION + rootUri + ":" + database.length() + ":" + database.lastModified();
     }
 
     @NonNull
@@ -139,7 +141,7 @@ public final class IpodScanner {
                 DocumentFile media = childFileCached(root, databasePath(track.getPath()),
                         directoryCache);
                 if (media != null && media.isFile()) {
-                    resolved.add(new IpodTrack(track.getTrackId(), track.getTitle(),
+                    resolved.add(new IpodTrack(track.getTrackId(), track.getTrackNumber(), track.getTitle(),
                         track.getArtist(), track.getAlbum(), media.getUri().toString(), null));
                 }
             }
