@@ -6,6 +6,8 @@ public final class IpodTrack {
     private final long trackId;
     /** 64-bit database id (mhit +0x70). Joins to ArtworkDB mhii track refs. */
     private final long dbId;
+    /** dbId whose ArtworkDB entry holds this track's cover, or 0. */
+    private final long artworkDbId;
     private final int trackNumber;
     private final String title;
     private final String artist;
@@ -36,8 +38,15 @@ public final class IpodTrack {
     public IpodTrack(long trackId, long dbId, int trackNumber, @NonNull String title,
                      @NonNull String artist, @NonNull String album,
                      @NonNull String path, Artwork artwork) {
+        this(trackId, dbId, dbId, trackNumber, title, artist, album, path, artwork);
+    }
+
+    private IpodTrack(long trackId, long dbId, long artworkDbId, int trackNumber,
+                      @NonNull String title, @NonNull String artist, @NonNull String album,
+                      @NonNull String path, Artwork artwork) {
         this.trackId = trackId;
         this.dbId = dbId;
+        this.artworkDbId = artworkDbId;
         this.trackNumber = trackNumber;
         this.title = title;
         this.artist = artist;
@@ -52,6 +61,14 @@ public final class IpodTrack {
 
     public long getDbId() {
         return dbId;
+    }
+
+    public long getArtworkDbId() {
+        return artworkDbId;
+    }
+
+    public IpodTrack withArtworkDbId(long id) {
+        return new IpodTrack(trackId, dbId, id, trackNumber, title, artist, album, path, artwork);
     }
 
     public int getTrackNumber() {

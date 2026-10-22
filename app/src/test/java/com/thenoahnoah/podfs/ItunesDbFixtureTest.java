@@ -1,5 +1,6 @@
 package com.thenoahnoah.podfs;
 
+import com.thenoahnoah.podfs.library.IpodScanner;
 import com.thenoahnoah.podfs.library.IpodTrack;
 import com.thenoahnoah.podfs.library.ItunesDbParser;
 import com.thenoahnoah.podfs.library.ArtworkDbParser;
@@ -95,6 +96,33 @@ public class ItunesDbFixtureTest {
         }
         assertEquals("Every ArtworkDB entry should join to one iTunesDB track by dbId",
                 locations.size(), resolved);
+    }
+
+    @Test
+    public void linksAlbumCoverToEveryTrackOfAlbum() throws IOException {
+        List<IpodTrack> tracks = ItunesDbParser.parse(Files.readAllBytes(findFixture().toPath()));
+        java.util.Map<Long, ArtworkDbParser.Location> locations = ArtworkDbParser.index(
+                Files.readAllBytes(findArtworkFixture().toPath()));
+
+        List<IpodTrack> linked = IpodScanner.linkAlbumArtwork(tracks, locations);
+
+        int withArtwork = 0;
+        IpodTrack owner = null;
+        for (IpodTrack track : linked) {
+            if (track.getArtworkDbId() != 0) {
+                withArtwork++;
+            }
+            if (track.getDbId() == 1L) {
+                owner = track;
+            }
+        }
+        assertTrue("Most tracks should resolve a cover; count=" + withArtwork, withArtwork >= 4000);
+        assertNotNull("Track 1 should be in the fixture", owner);
+        for (IpodTrack track : linked) {
+            if (track.getAlbum().equals(owner.getAlbum()) && track.getArtist().equals(owner.getArtist())) {
+                assertEquals("Track without its own cover: " + track.getTitle(), 1L, track.getArtworkDbId());
+            }
+        }
     }
 
     @Test

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.documentfile.provider.DocumentFile;
 
 import java.util.ArrayList;
@@ -13,7 +14,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import android.content.SharedPreferences;
 import org.json.JSONArray;
@@ -63,6 +67,11 @@ public final class IpodScanner {
         }
         List<IpodTrack> tracks = new ArrayList<>(library.tracks);
         boolean usedFallback = tracks.isEmpty();
+        Map<Long, ArtworkDbParser.Location> artwork = usedFallback ? null
+                : cachedArtworkIndex(context, rootUri, root);
+        if (artwork != null) {
+            tracks = linkAlbumArtwork(tracks, artwork);
+        }
         if (tracks.isEmpty()) {
             collectMp3s(childDirectory(root, "iPod_Control/Music"), tracks);
         }
@@ -199,13 +208,24 @@ public final class IpodScanner {
 
     public static Artwork loadArtwork(@NonNull Context context, @NonNull Uri rootUri,
                                       @NonNull IpodTrack track) {
-        if (track.getDbId() == 0) {
+        if (track.getArtworkDbId() == 0) {
             return null;
         }
         DocumentFile root = DocumentFile.fromTreeUri(context, rootUri);
         if (root == null) {
             return null;
         }
+        Map<Long, ArtworkDbParser.Location> index = cachedArtworkIndex(context, rootUri, root);
+        if (index == null) {
+            return null;
+        }
+        return readCover(context, root, index.get(track.getArtworkDbId()));
+    }
+
+    @Nullable
+    private static Map<Long, ArtworkDbParser.Location> cachedArtworkIndex(@NonNull Context context,
+                                                                         @NonNull Uri rootUri,
+                                                                         @NonNull DocumentFile root) {
         DocumentFile database = childFile(root, "iPod_Control/Artwork/ArtworkDB");
         if (database == null) {
             return null;
@@ -219,7 +239,58 @@ public final class IpodScanner {
             }
             ARTWORK_INDEX_CACHE.put(key, index);
         }
-        return readCover(context, root, index.get(track.getDbId()));
+        return index;
+    }
+
+    /**
+     * ArtworkDB links one cover per album to a single track, so the other tracks of that
+     * album borrow it by album and artist, or by album alone when the title has one artist.
+     */
+    @NonNull
+    public static List<IpodTrack> linkAlbumArtwork(@NonNull List<IpodTrack> tracks,
+                                                   @NonNull Map<Long, ArtworkDbParser.Location> artwork) {
+        Map<String, Long> ownerByAlbumAndArtist = new HashMap<>();
+        Map<String, Long> ownerByAlbum = new HashMap<>();
+        Map<String, Set<String>> artistsByAlbum = new HashMap<>();
+        for (IpodTrack track : tracks) {
+            if (!hasOwnArtwork(track, artwork) || albumKey(track.getAlbum()).isEmpty()) {
+                continue;
+            }
+            String album = albumKey(track.getAlbum());
+            String artist = albumKey(track.getArtist());
+            ownerByAlbumAndArtist.putIfAbsent(album + "\n" + artist, track.getDbId());
+            ownerByAlbum.putIfAbsent(album, track.getDbId());
+            artistsByAlbum.computeIfAbsent(album, key -> new HashSet<>()).add(artist);
+        }
+        List<IpodTrack> linked = new ArrayList<>(tracks.size());
+        for (IpodTrack track : tracks) {
+            long artworkDbId = 0;
+            if (hasOwnArtwork(track, artwork)) {
+                artworkDbId = track.getDbId();
+            } else if (!albumKey(track.getAlbum()).isEmpty()) {
+                String album = albumKey(track.getAlbum());
+                Long owner = ownerByAlbumAndArtist.get(album + "\n" + albumKey(track.getArtist()));
+                Set<String> artists = artistsByAlbum.get(album);
+                if (owner == null && artists != null && artists.size() == 1) {
+                    owner = ownerByAlbum.get(album);
+                }
+                if (owner != null) {
+                    artworkDbId = owner;
+                }
+            }
+            linked.add(track.withArtworkDbId(artworkDbId));
+        }
+        return linked;
+    }
+
+    private static boolean hasOwnArtwork(@NonNull IpodTrack track,
+                                         @NonNull Map<Long, ArtworkDbParser.Location> artwork) {
+        return track.getDbId() != 0 && artwork.containsKey(track.getDbId());
+    }
+
+    @NonNull
+    private static String albumKey(@NonNull String value) {
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 
     @NonNull
