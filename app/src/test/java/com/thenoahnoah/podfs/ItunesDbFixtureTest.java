@@ -64,6 +64,46 @@ public class ItunesDbFixtureTest {
         assertTrue(artwork.getRgb().length > 0);
     }
 
+    @Test
+    public void resolvesCoversForIpodTracks() throws IOException {
+        File database = findFixture();
+        File artworkDb = findArtworkFixture();
+        assertTrue("Copied iTunesDB fixture is missing", database.isFile());
+        assertTrue("Copied ArtworkDB fixture is missing", artworkDb.isFile());
+
+        List<IpodTrack> tracks = ItunesDbParser.parse(Files.readAllBytes(database.toPath()));
+        java.util.Map<Long, ArtworkDbParser.Location> locations = ArtworkDbParser.index(
+                Files.readAllBytes(artworkDb.toPath()));
+        byte[] shardData = Files.readAllBytes(new File(artworkDb.getParentFile(), "F1060_1.ithmb").toPath());
+
+        int resolved = 0;
+        for (IpodTrack track : tracks) {
+            ArtworkDbParser.Location location = locations.get(track.getTrackId());
+            if (location == null) {
+                continue;
+            }
+            int start = (int) location.getOffset();
+            int end = start + (int) location.getSize();
+            assertTrue("Artwork range exceeds shard for track " + track.getTrackId(),
+                    start >= 0 && end <= shardData.length);
+            byte[] payload = java.util.Arrays.copyOfRange(shardData, start, end);
+            Artwork artwork = ArtworkDbParser.decodeRgb565(payload, location.getWidth(), location.getHeight());
+            assertTrue("Decoded cover is blank for track " + track.getTrackId(),
+                    hasVisiblePixels(artwork.getRgb()));
+            resolved++;
+        }
+        assertTrue("Expected many iTunesDB tracks to resolve covers; resolved=" + resolved, resolved >= 100);
+    }
+
+    private static boolean hasVisiblePixels(byte[] rgb) {
+        for (byte value : rgb) {
+            if (value != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static File findFixture() {
         String[] candidates = {
                 "example/iTunes/iTunes/iTunesDB",

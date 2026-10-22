@@ -20,7 +20,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class IpodScanner {
-    private static final String CACHE_VERSION = "v2:";
+    private static final String CACHE_VERSION = "v3:";
     private static final Map<String, Map<Long, ArtworkDbParser.Location>> ARTWORK_INDEX_CACHE =
             new ConcurrentHashMap<>();
     private IpodScanner() {
@@ -168,6 +168,9 @@ public final class IpodScanner {
         Map<Long, ArtworkDbParser.Location> index = ARTWORK_INDEX_CACHE.get(key);
         if (index == null) {
             index = readArtwork(context, root);
+            if (index == null) {
+                return null;
+            }
             ARTWORK_INDEX_CACHE.put(key, index);
         }
         return readCover(context, root, index.get(track.getTrackId()));
@@ -201,18 +204,17 @@ public final class IpodScanner {
         return current;
     }
 
-    @NonNull
+    /** Returns the parsed ArtworkDB index, or null when the database cannot be read. */
     private static Map<Long, ArtworkDbParser.Location> readArtwork(@NonNull Context context,
                                                                     @NonNull DocumentFile root) {
         DocumentFile database = childFile(root, "iPod_Control/Artwork/ArtworkDB");
         if (database == null) {
-            return java.util.Collections.emptyMap();
+            return null;
         }
         try (InputStream input = context.getContentResolver().openInputStream(database.getUri())) {
-            return input == null ? java.util.Collections.emptyMap()
-                    : ArtworkDbParser.index(readAll(input));
-        } catch (IOException | IllegalArgumentException ignored) {
-            return java.util.Collections.emptyMap();
+            return input == null ? null : ArtworkDbParser.index(readAll(input));
+        } catch (IOException | RuntimeException ignored) {
+            return null;
         }
     }
 
@@ -232,7 +234,7 @@ public final class IpodScanner {
             }
             byte[] payload = readExactly(input, (int) location.getSize());
             return ArtworkDbParser.decodeRgb565(payload, location.getWidth(), location.getHeight());
-        } catch (IOException | IllegalArgumentException ignored) {
+        } catch (IOException | RuntimeException ignored) {
             return null;
         }
     }
