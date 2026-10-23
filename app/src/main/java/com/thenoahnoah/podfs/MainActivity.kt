@@ -10,10 +10,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.os.Build
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.media.MediaBrowserServiceCompat
+import androidx.media.MediaBrowserServiceCompat.BrowserRoot
 import androidx.media.app.NotificationCompat.MediaStyle
+import android.support.v4.media.MediaBrowserCompat
 import android.app.PendingIntent
 import android.Manifest
 import android.content.pm.PackageManager
@@ -29,6 +36,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,7 +49,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
@@ -78,7 +88,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +99,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -125,23 +135,58 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private class PlaybackController(
+object PlaybackHub {
+    private var session: MediaSessionCompat? = null
+    private var controller: PlaybackController? = null
+
+    fun session(context: Context): MediaSessionCompat = session ?: MediaSessionCompat(context.applicationContext, "PodFS").also {
+        session = it
+    }
+
+    fun controller(context: Context): PlaybackController = controller ?: PlaybackController(context.applicationContext, session(context)).also {
+        controller = it
+    }
+
+    fun existingController(): PlaybackController? = controller
+}
+
+class PodFsMediaService : MediaBrowserServiceCompat() {
+    override fun onCreate() {
+        super.onCreate()
+        sessionToken = PlaybackHub.session(this).sessionToken
+        PlaybackHub.controller(this).onNotification = { notification, playing ->
+            val manager = getSystemService(NotificationManager::class.java)
+            when {
+                notification == null -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    manager.cancel(42)
+                }
+                playing -> ServiceCompat.startForeground(this, 42, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                else -> {
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                    manager.notify(42, notification)
+                }
+            }
+        }
+    }
+
+    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot =
+        BrowserRoot("root", null)
+
+    override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
+        result.sendResult(mutableListOf())
+    }
+}
+
+class PlaybackController(
     private val context: Context,
-    private val onStateChanged: (IpodTrack?, Boolean) -> Unit,
-    private val onLog: (String) -> Unit
+    private val session: MediaSessionCompat
 ) {
+    var onStateChanged: (IpodTrack?, Boolean) -> Unit = { _, _ -> }
+    var onLog: (String) -> Unit = {}
+    var onNotification: (Notification?, Boolean) -> Unit = { _, _ -> }
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
     private val artworkExecutor = Executors.newSingleThreadExecutor()
-    private val session = MediaSessionCompat(context, "PodFS").apply {
-        setCallback(object : MediaSessionCompat.Callback() {
-            override fun onPlay() = resume()
-            override fun onPause() = pause()
-            override fun onStop() = stop()
-            override fun onSkipToNext() = next()
-            override fun onSkipToPrevious() = previous()
-        })
-        isActive = true
-    }
     private var player: MediaPlayer? = null
     private var queue = emptyList<IpodTrack>()
     private var index = -1
@@ -151,6 +196,14 @@ private class PlaybackController(
     private var isPlaying = false
 
     init {
+        session.setCallback(object : MediaSessionCompat.Callback() {
+            override fun onPlay() = resume()
+            override fun onPause() = pause()
+            override fun onStop() = stop()
+            override fun onSkipToNext() = next()
+            override fun onSkipToPrevious() = previous()
+        })
+        session.isActive = true
         if (Build.VERSION.SDK_INT >= 26) {
             notificationManager.createNotificationChannel(NotificationChannel("podfs_playback", "PodFS playback", NotificationManager.IMPORTANCE_LOW))
         }
@@ -196,14 +249,8 @@ private class PlaybackController(
         isPlaying = false
         current = null
         session.isActive = false
-        notificationManager.cancel(42)
+        onNotification(null, false)
         onStateChanged(null, false)
-    }
-
-    fun release() {
-        stop()
-        artworkExecutor.shutdownNow()
-        session.release()
     }
 
     private fun openCurrent() {
@@ -240,7 +287,7 @@ private class PlaybackController(
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album).build()
         session.setMetadata(metadata)
-        notificationManager.notify(42, buildNotification(track, isPlaying, currentArtwork))
+        onNotification(buildNotification(track, isPlaying, currentArtwork), isPlaying)
         onStateChanged(track, isPlaying)
         rootUri?.let { uri ->
             artworkExecutor.execute {
@@ -251,7 +298,7 @@ private class PlaybackController(
                     session.setMetadata(MediaMetadataCompat.Builder(metadata)
                         .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
                         .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap).build())
-                    notificationManager.notify(42, buildNotification(track, isPlaying, bitmap))
+                    onNotification(buildNotification(track, isPlaying, bitmap), isPlaying)
                 }
             }
         }
@@ -283,19 +330,19 @@ private class PlaybackController(
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 }
 
-private class PlaybackActionReceiver : android.content.BroadcastReceiver() {
+class PlaybackActionReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val playback = PlaybackHub.controller(context)
         when (intent.getStringExtra("action")) {
-            "previous" -> active?.previous()
-            "play" -> active?.resume()
-            "pause" -> active?.pause()
-            "next" -> active?.next()
-            "stop" -> active?.stop()
+            "previous" -> playback.previous()
+            "play" -> playback.resume()
+            "pause" -> playback.pause()
+            "next" -> playback.next()
+            "stop" -> playback.stop()
         }
     }
 
     companion object {
-        var active: PlaybackController? = null
         fun intent(context: Context, action: String) = Intent(context, PlaybackActionReceiver::class.java).putExtra("action", action)
     }
 }
@@ -360,10 +407,14 @@ private fun PodFsApp() {
     }
 
     val playback = remember {
-        PlaybackController(context, { track, playing ->
-            playingTrack = track
-            isPlaying = playing
-        }, ::log).also { PlaybackActionReceiver.active = it }
+        context.startService(Intent(context, PodFsMediaService::class.java))
+        PlaybackHub.controller(context).also {
+            it.onStateChanged = { track, playing ->
+                playingTrack = track
+                isPlaying = playing
+            }
+            it.onLog = ::log
+        }
     }
 
     fun scanVolume(uri: Uri) {
@@ -485,13 +536,6 @@ private fun PodFsApp() {
                 preferences.edit().remove("selected_volume_uri").apply()
                 log("Saved volume permission is no longer available.")
             }
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            playback.release()
-            PlaybackActionReceiver.active = null
         }
     }
 
@@ -865,31 +909,65 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
             }
         }
     }
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(32.dp))
-        Surface(modifier = Modifier.size(270.dp), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-            Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = 270.dp) }
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        val artSize = if (landscape) (maxHeight * 0.6f).coerceIn(120.dp, 320.dp) else (maxHeight * 0.38f).coerceIn(120.dp, 270.dp)
+        val artwork_ = @Composable {
+            Surface(modifier = Modifier.size(artSize), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = artSize) }
+            }
         }
-        Spacer(Modifier.height(28.dp))
-        Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(28.dp))
-        Surface(modifier = Modifier.fillMaxWidth().height(4.dp), color = MaterialTheme.colorScheme.surfaceVariant) {}
-        Spacer(Modifier.height(24.dp))
-        if (track != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "Previous") }
-                IconButton(onClick = onToggle, modifier = Modifier.size(64.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(32.dp))) {
-                    Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(30.dp))
+        val info = @Composable { horizontalAlignment: Alignment.Horizontal ->
+            Column(horizontalAlignment = horizontalAlignment) {
+                Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
+                Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
+            }
+        }
+        val controls = @Composable {
+            if (track != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "Previous") }
+                    IconButton(onClick = onToggle, modifier = Modifier.size(64.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(32.dp))) {
+                        Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(30.dp))
+                    }
+                    IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "Next") }
+                    IconButton(onClick = onStop) { Icon(Icons.Default.Stop, "Stop") }
                 }
-                IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "Next") }
-                IconButton(onClick = onStop) { Icon(Icons.Default.Stop, "Stop") }
+            } else {
+                Button(onClick = onBrowse) { Text("Browse library") }
+            }
+        }
+        if (landscape) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(32.dp)
+            ) {
+                artwork_()
+                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.Start) {
+                    Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(12.dp))
+                    info(Alignment.Start)
+                    Spacer(Modifier.height(16.dp))
+                    controls()
+                }
             }
         } else {
-            Button(onClick = onBrowse) { Text("Browse library") }
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(12.dp))
+                artwork_()
+                Spacer(Modifier.height(16.dp))
+                info(Alignment.CenterHorizontally)
+                Spacer(Modifier.height(16.dp))
+                controls()
+            }
         }
     }
+
 }
 
 private const val LOG_PAGE = 20

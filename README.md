@@ -126,8 +126,9 @@ MainActivity.kt
       -> IpodScanResult
   -> Compose track list
   -> ArtworkDB lazy artwork loading
-  -> queue-aware MediaPlayer playback
-  -> MediaSessionCompat notification metadata, artwork, and controls
+  -> PlaybackHub / PlaybackController (queue-aware MediaPlayer)
+  -> PodFsMediaService (MediaBrowserServiceCompat, foreground mediaPlayback)
+     -> MediaSessionCompat metadata, artwork, and controls
 ```
 
 ### UI
@@ -141,7 +142,8 @@ MainActivity.kt
 - shows the Settings tab with the newest 20 activity-log lines first, a Load more
   button that reveals 20 more per press, an Email debug log button, and a Delete
   debug log button that asks for confirmation;
-- owns the queue-aware `MediaPlayer` controller and media session;
+- starts `PodFsMediaService`, which owns the media session and the shared
+  queue-aware `MediaPlayer` controller (via `PlaybackHub`);
 - publishes playback metadata and notification actions to Android;
 - converts decoded artwork RGB bytes into an Android `Bitmap` for display.
 
@@ -245,13 +247,17 @@ iPod generation.
 
 ### Playback and Android controls
 
-`MainActivity.kt` uses AndroidX `MediaSessionCompat` around the existing
-`MediaPlayer`. The session exposes title, artist, album, album artwork,
-play/pause, previous, next, and stop actions. Artwork is loaded asynchronously
-from ArtworkDB and supplied both as session metadata and as the notification's
-large icon. The current implementation is process-bound; a future
-`MediaSessionService`/foreground-service migration is still needed for fully
-reliable playback after the app process is reclaimed.
+`PodFsMediaService` (a `MediaBrowserServiceCompat`) owns the `MediaSessionCompat`
+so head units can discover the app as a media source. `PlaybackHub` holds the
+shared `PlaybackController`, which wraps the queue-aware `MediaPlayer`. The
+session exposes title, artist, album, album artwork, play/pause, previous, next,
+and stop actions. Artwork is loaded asynchronously from ArtworkDB and supplied
+both as session metadata and as the notification's large icon. While a track is
+playing, the service runs as a foreground `mediaPlayback` service; when paused
+it drops to a regular notification. The service is declared in the manifest
+with `android:foregroundServiceType="mediaPlayback"`. Playback still starts from
+the app UI; head unit media-button routing for the MediaSession is not yet
+verified on the device.
 
 ### PhotosDB
 
@@ -359,8 +365,9 @@ does not create a signed production release APK.
 - The complete hierarchical iPod menu is not implemented. Playlists cover only
   the `mhyp` records read from iTunesDB.
 - Playback has queue navigation, notification controls, and automatic
-  completion advancement, but still lacks seeking, audio focus policy, and a
-  process-independent foreground media service.
+  completion advancement, and runs as a foreground media service. It still
+  lacks seeking and audio focus policy, and the head unit's discovery and
+  media-button behavior is not yet verified on device.
 - Artwork support is limited to the currently recognized RGB565 format and
   requires a resolvable ArtworkDB relationship. Visible rows load artwork
   lazily, and the player/notification loads the active track's artwork lazily;
@@ -408,7 +415,7 @@ The next useful implementation steps are:
 4. Move artwork decoding and caching toward an efficient thumbnail pipeline.
 5. Add a true per-file/per-track delta index with validation of cached media
   URIs before reusing cached metadata.
-6. Add a foreground `MediaSessionService`, audio focus handling, and seeking.
+6. Add audio focus handling and seeking, and verify head unit media discovery.
 7. Add the remaining hierarchical iPod menus.
 8. Decide whether PhotosDB support is in scope.
 9. Expand parser coverage toward the relevant iOpenPod formats while keeping
