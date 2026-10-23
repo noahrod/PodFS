@@ -15,7 +15,10 @@ import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import android.app.PendingIntent
+import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -327,6 +330,7 @@ private fun PodFsApp() {
     var selectedVolumeUri by remember {
         mutableStateOf(preferences.getString("selected_volume_uri", null)?.let(Uri::parse))
     }
+    var pendingVolume by remember { mutableStateOf<Uri?>(null) }
 
     fun log(message: String) {
         activityLog = DebugLog.append(message)
@@ -383,6 +387,20 @@ private fun PodFsApp() {
         }
     }
 
+    fun selectVolume(uri: Uri) {
+        preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
+        selectedVolumeUri = uri
+        if (uri.scheme == "content") {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                log("This storage does not keep access after restart.")
+            }
+        }
+        log("Selected storage volume.")
+        scanVolume(uri)
+    }
+
     fun togglePlayback(track: IpodTrack, queue: List<IpodTrack>) {
         if (playingTrack?.path == track.path) {
             playback.toggle()
@@ -401,17 +419,47 @@ private fun PodFsApp() {
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
-            selectedVolumeUri = uri
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) {
-                log("This storage does not keep access after restart.")
-            }
-            log("Selected storage volume.")
-            scanVolume(uri)
+        if (uri != null) selectVolume(uri)
+    }
+
+    val storagePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val volume = pendingVolume
+        pendingVolume = null
+        if (volume == null) return@rememberLauncherForActivityResult
+        if (granted) {
+            selectVolume(volume)
+        } else {
+            log("Storage permission denied; PodFS cannot read the iPod.")
         }
+    }
+
+    fun openMountedVolume() {
+        val volume = IpodScanner.findMountedVolumes().firstOrNull()
+        if (volume == null) {
+            log("No iPod found under /mnt/media_rw or /storage. Plug in the iPod and try again.")
+            return
+        }
+        log("Using mounted volume ${volume.path}.")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                log("Grant All files access to PodFS, then tap Choose iPod volume again.")
+                try {
+                    context.startActivity(
+                        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            Uri.parse("package:${context.packageName}"))
+                    )
+                } catch (_: ActivityNotFoundException) {
+                    log("This device has no All files access settings screen.")
+                }
+                return
+            }
+        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED) {
+            pendingVolume = volume
+            storagePermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+            return
+        }
+        selectVolume(volume)
     }
 
     fun openVolumePicker() {
@@ -420,6 +468,7 @@ private fun PodFsApp() {
             picker.launch(null)
         } catch (_: ActivityNotFoundException) {
             log("This device has no folder picker.")
+            openMountedVolume()
         }
     }
 
@@ -427,7 +476,9 @@ private fun PodFsApp() {
         val savedUri = preferences.getString("selected_volume_uri", null)?.let(Uri::parse)
         if (savedUri != null) {
             try {
-                context.contentResolver.takePersistableUriPermission(savedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (savedUri.scheme == "content") {
+                    context.contentResolver.takePersistableUriPermission(savedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
                 log("Restored previously selected volume.")
                 scanVolume(savedUri)
             } catch (_: SecurityException) {
