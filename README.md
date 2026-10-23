@@ -14,7 +14,9 @@ work that remains. Do not treat the roadmap as implemented functionality.
 The project contains a working first vertical slice:
 
 - The user explicitly chooses a mounted volume with Android's Storage Access
-  Framework.
+  Framework. On head units without a document picker, PodFS scans known mount
+  points (`/mnt/media_rw/*`, `/storage/*`) for `iPod_Control/Music` and uses
+  the first match (see User Flow).
 - PodFS validates that the selected volume contains `iPod_Control/Music`.
 - PodFS reads the classic `iPod_Control/iTunes/iTunesDB` when it is present and
   can parse the supported track metadata, including the copied fixture under
@@ -68,7 +70,12 @@ artwork. The current scope is deliberately narrow:
 1. Launch the app.
 2. Tap **Choose iPod volume**.
 3. Select the mounted iPod root directory in the Android document-tree picker.
-4. PodFS requests persistent read permission for that URI.
+   If the device has no document picker (common on car head units), PodFS
+   instead scans mount points for an iPod and uses the first match. It requests
+   All-files access on Android 11+ (or storage read permission on older
+   versions) if it is not already granted.
+4. For a picked volume, PodFS requests persistent read permission for that URI.
+   Mounted-volume fallback paths are `file://` URIs and skip this step.
 5. PodFS scans on a background coroutine. The UI activity log records scan
   start, completion/failure, and elapsed time.
 6. If the volume looks like an iPod, the Songs browse mode is shown.
@@ -78,9 +85,10 @@ artwork. The current scope is deliberately narrow:
   media notification for previous, next, pause, and stop.
 9. Open the Settings tab to read the debug log.
 
-The selected URI is passed to `DocumentFile.fromTreeUri`. The app does not
-assume a filesystem path and does not use direct `java.io.File` access for the
-mounted volume.
+Picked URIs are passed to `DocumentFile.fromTreeUri`. The mount-point fallback
+is the only place that uses `java.io.File`; it wraps the result in
+`DocumentFile.fromFile` so the rest of the scanner still works through
+`DocumentFile`.
 
 ## Expected iPod Layout
 
@@ -339,8 +347,9 @@ does not create a signed production release APK.
 ## Known Limitations
 
 - No raw USB host support; the device must already be mounted by Android.
-- No automatic volume detection; the selected volume URI is remembered and
-  restored when the app opens.
+- Volume detection is limited to the mount-point fallback; the selected volume
+  URI is remembered and restored when the app opens. Head-unit mount paths vary
+  by vendor and are not guaranteed to be readable by third-party apps.
 - No full iTunesDB parser parity with iOpenPod; the parser supports the supplied
   fixture layout and a conservative subset of other layouts.
 - No support for iTunesCDB or other database variants.
@@ -379,7 +388,9 @@ deliberately changed:
 3. Treat artwork as optional. A missing or unsupported cover must never hide a
    playable track.
 4. Resolve iPod database paths through `DocumentFile`; do not assume that a
-   `content://` URI can be converted into a normal filesystem path.
+   `content://` URI can be converted into a normal filesystem path. The only
+   exception is `IpodScanner.findMountedVolumes()`, which discovers mount points
+   with `java.io.File` for head units without a document picker.
 5. Add parser tests with small synthetic binary fixtures before expanding
    support for additional database layouts.
 6. Preserve the minimum API 24 requirement unless the product decision changes.
