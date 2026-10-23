@@ -14,7 +14,9 @@ work that remains. Do not treat the roadmap as implemented functionality.
 The project contains a working first vertical slice:
 
 - The user explicitly chooses a mounted volume with Android's Storage Access
-  Framework.
+  Framework. On head units without a document picker, PodFS scans known mount
+  points (`/mnt/media_rw/*`, `/storage/*`) for `iPod_Control/Music` and uses
+  the first match (see User Flow).
 - PodFS validates that the selected volume contains `iPod_Control/Music`.
 - PodFS reads the classic `iPod_Control/iTunes/iTunesDB` when it is present and
   can parse the supported track metadata, including the copied fixture under
@@ -68,7 +70,12 @@ artwork. The current scope is deliberately narrow:
 1. Launch the app.
 2. Tap **Choose iPod volume**.
 3. Select the mounted iPod root directory in the Android document-tree picker.
-4. PodFS requests persistent read permission for that URI.
+   If the device has no document picker (common on car head units), PodFS
+   instead scans mount points for an iPod and uses the first match. It requests
+   All-files access on Android 11+ (or storage read permission on older
+   versions) if it is not already granted.
+4. For a picked volume, PodFS requests persistent read permission for that URI.
+   Mounted-volume fallback paths are `file://` URIs and skip this step.
 5. PodFS scans on a background coroutine. The UI activity log records scan
   start, completion/failure, and elapsed time.
 6. If the volume looks like an iPod, the Songs browse mode is shown.
@@ -78,9 +85,10 @@ artwork. The current scope is deliberately narrow:
   media notification for previous, next, pause, and stop.
 9. Open the Settings tab to read the debug log.
 
-The selected URI is passed to `DocumentFile.fromTreeUri`. The app does not
-assume a filesystem path and does not use direct `java.io.File` access for the
-mounted volume.
+Picked URIs are passed to `DocumentFile.fromTreeUri`. The mount-point fallback
+is the only place that uses `java.io.File`; it wraps the result in
+`DocumentFile.fromFile` so the rest of the scanner still works through
+`DocumentFile`.
 
 ## Expected iPod Layout
 
@@ -118,8 +126,9 @@ MainActivity.kt
       -> IpodScanResult
   -> Compose track list
   -> ArtworkDB lazy artwork loading
-  -> queue-aware MediaPlayer playback
-  -> MediaSessionCompat notification metadata, artwork, and controls
+  -> PlaybackHub / PlaybackController (queue-aware MediaPlayer)
+  -> PodFsMediaService (MediaBrowserServiceCompat, foreground mediaPlayback)
+     -> MediaSessionCompat metadata, artwork, and controls
 ```
 
 ### UI
@@ -133,7 +142,8 @@ MainActivity.kt
 - shows the Settings tab with the newest 20 activity-log lines first, a Load more
   button that reveals 20 more per press, an Email debug log button, and a Delete
   debug log button that asks for confirmation;
-- owns the queue-aware `MediaPlayer` controller and media session;
+- starts `PodFsMediaService`, which owns the media session and the shared
+  queue-aware `MediaPlayer` controller (via `PlaybackHub`);
 - publishes playback metadata and notification actions to Android;
 - converts decoded artwork RGB bytes into an Android `Bitmap` for display.
 
@@ -237,13 +247,17 @@ iPod generation.
 
 ### Playback and Android controls
 
-`MainActivity.kt` uses AndroidX `MediaSessionCompat` around the existing
-`MediaPlayer`. The session exposes title, artist, album, album artwork,
-play/pause, previous, next, and stop actions. Artwork is loaded asynchronously
-from ArtworkDB and supplied both as session metadata and as the notification's
-large icon. The current implementation is process-bound; a future
-`MediaSessionService`/foreground-service migration is still needed for fully
-reliable playback after the app process is reclaimed.
+`PodFsMediaService` (a `MediaBrowserServiceCompat`) owns the `MediaSessionCompat`
+so head units can discover the app as a media source. `PlaybackHub` holds the
+shared `PlaybackController`, which wraps the queue-aware `MediaPlayer`. The
+session exposes title, artist, album, album artwork, play/pause, previous, next,
+and stop actions. Artwork is loaded asynchronously from ArtworkDB and supplied
+both as session metadata and as the notification's large icon. While a track is
+playing, the service runs as a foreground `mediaPlayback` service; when paused
+it drops to a regular notification. The service is declared in the manifest
+with `android:foregroundServiceType="mediaPlayback"`. Playback still starts from
+the app UI; head unit media-button routing for the MediaSession is not yet
+verified on the device.
 
 ### PhotosDB
 
@@ -339,8 +353,9 @@ does not create a signed production release APK.
 ## Known Limitations
 
 - No raw USB host support; the device must already be mounted by Android.
-- No automatic volume detection; the selected volume URI is remembered and
-  restored when the app opens.
+- Volume detection is limited to the mount-point fallback; the selected volume
+  URI is remembered and restored when the app opens. Head-unit mount paths vary
+  by vendor and are not guaranteed to be readable by third-party apps.
 - No full iTunesDB parser parity with iOpenPod; the parser supports the supplied
   fixture layout and a conservative subset of other layouts.
 - No support for iTunesCDB or other database variants.
@@ -350,8 +365,9 @@ does not create a signed production release APK.
 - The complete hierarchical iPod menu is not implemented. Playlists cover only
   the `mhyp` records read from iTunesDB.
 - Playback has queue navigation, notification controls, and automatic
-  completion advancement, but still lacks seeking, audio focus policy, and a
-  process-independent foreground media service.
+  completion advancement, and runs as a foreground media service. It still
+  lacks seeking and audio focus policy, and the head unit's discovery and
+  media-button behavior is not yet verified on device.
 - Artwork support is limited to the currently recognized RGB565 format and
   requires a resolvable ArtworkDB relationship. Visible rows load artwork
   lazily, and the player/notification loads the active track's artwork lazily;
@@ -379,7 +395,9 @@ deliberately changed:
 3. Treat artwork as optional. A missing or unsupported cover must never hide a
    playable track.
 4. Resolve iPod database paths through `DocumentFile`; do not assume that a
-   `content://` URI can be converted into a normal filesystem path.
+   `content://` URI can be converted into a normal filesystem path. The only
+   exception is `IpodScanner.findMountedVolumes()`, which discovers mount points
+   with `java.io.File` for head units without a document picker.
 5. Add parser tests with small synthetic binary fixtures before expanding
    support for additional database layouts.
 6. Preserve the minimum API 24 requirement unless the product decision changes.
@@ -397,7 +415,7 @@ The next useful implementation steps are:
 4. Move artwork decoding and caching toward an efficient thumbnail pipeline.
 5. Add a true per-file/per-track delta index with validation of cached media
   URIs before reusing cached metadata.
-6. Add a foreground `MediaSessionService`, audio focus handling, and seeking.
+6. Add audio focus handling and seeking, and verify head unit media discovery.
 7. Add the remaining hierarchical iPod menus.
 8. Decide whether PhotosDB support is in scope.
 9. Expand parser coverage toward the relevant iOpenPod formats while keeping
