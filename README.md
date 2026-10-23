@@ -249,7 +249,11 @@ iPod generation.
 
 `PodFsMediaService` (a `MediaBrowserServiceCompat`) owns the `MediaSessionCompat`
 so head units can discover the app as a media source. `PlaybackHub` holds the
-shared `PlaybackController`, which wraps the queue-aware `MediaPlayer`. The
+shared `PlaybackController` and the observable now-playing state
+(`playingTrack`, `isPlaying`), so the UI recovers the current track after the
+Activity is recreated by rotation or returning from another app. The session
+sets media-button and transport flags and an activity PendingIntent so system
+controls can reopen PodFS. The controller wraps the queue-aware `MediaPlayer`. The
 session exposes title, artist, album, album artwork, play/pause, previous, next,
 and stop actions. Artwork is loaded asynchronously from ArtworkDB and supplied
 both as session metadata and as the notification's large icon. While a track is

@@ -138,8 +138,14 @@ class MainActivity : ComponentActivity() {
 object PlaybackHub {
     private var session: MediaSessionCompat? = null
     private var controller: PlaybackController? = null
+    var playingTrack by mutableStateOf<IpodTrack?>(null)
+    var isPlaying by mutableStateOf(false)
 
     fun session(context: Context): MediaSessionCompat = session ?: MediaSessionCompat(context.applicationContext, "PodFS").also {
+        it.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+        it.setSessionActivity(PendingIntent.getActivity(context, 0,
+            Intent(context, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE))
         session = it
     }
 
@@ -182,7 +188,6 @@ class PlaybackController(
     private val context: Context,
     private val session: MediaSessionCompat
 ) {
-    var onStateChanged: (IpodTrack?, Boolean) -> Unit = { _, _ -> }
     var onLog: (String) -> Unit = {}
     var onNotification: (Notification?, Boolean) -> Unit = { _, _ -> }
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
@@ -250,7 +255,8 @@ class PlaybackController(
         current = null
         session.isActive = false
         onNotification(null, false)
-        onStateChanged(null, false)
+        PlaybackHub.playingTrack = null
+        PlaybackHub.isPlaying = false
     }
 
     private fun openCurrent() {
@@ -259,7 +265,8 @@ class PlaybackController(
         player = try { MediaPlayer.create(context, Uri.parse(track.path)) } catch (_: RuntimeException) { null }
         if (player == null) {
             onLog("Playback could not open: ${track.title} (${track.path})")
-            onStateChanged(null, false)
+            PlaybackHub.playingTrack = null
+            PlaybackHub.isPlaying = false
             return
         }
         current = track
@@ -288,7 +295,9 @@ class PlaybackController(
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album).build()
         session.setMetadata(metadata)
         onNotification(buildNotification(track, isPlaying, currentArtwork), isPlaying)
-        onStateChanged(track, isPlaying)
+        PlaybackHub.playingTrack = track
+        PlaybackHub.isPlaying = isPlaying
+        session.isActive = true
         rootUri?.let { uri ->
             artworkExecutor.execute {
                 val artwork = IpodScanner.loadArtwork(context, uri, track)
@@ -371,8 +380,8 @@ private fun PodFsApp() {
     var selectedGroup by remember { mutableStateOf<String?>(null) }
     var scanResult by remember { mutableStateOf<IpodScanResult?>(null) }
     var isScanning by remember { mutableStateOf(false) }
-    var playingTrack by remember { mutableStateOf<IpodTrack?>(null) }
-    var isPlaying by remember { mutableStateOf(false) }
+    val playingTrack = PlaybackHub.playingTrack
+    val isPlaying = PlaybackHub.isPlaying
     var activityLog by remember { mutableStateOf(DebugLog.snapshot()) }
     var selectedVolumeUri by remember {
         mutableStateOf(preferences.getString("selected_volume_uri", null)?.let(Uri::parse))
@@ -409,10 +418,6 @@ private fun PodFsApp() {
     val playback = remember {
         context.startService(Intent(context, PodFsMediaService::class.java))
         PlaybackHub.controller(context).also {
-            it.onStateChanged = { track, playing ->
-                playingTrack = track
-                isPlaying = playing
-            }
             it.onLog = ::log
         }
     }
