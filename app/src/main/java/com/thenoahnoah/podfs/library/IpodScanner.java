@@ -2,6 +2,7 @@ package com.thenoahnoah.podfs.library;
 
 import android.content.Context;
 import android.net.Uri;
+import java.io.File;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -31,6 +32,46 @@ public final class IpodScanner {
     private IpodScanner() {
     }
 
+    /**
+     * Returns file:// URIs of mounted volumes that contain iPod_Control/Music. Used when the
+     * device has no Storage Access Framework picker (common on head units), where USB storage
+     * is mounted under /mnt/media_rw or /storage.
+     */
+    @NonNull
+    public static List<Uri> findMountedVolumes() {
+        List<Uri> volumes = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        List<File> candidates = new ArrayList<>();
+        candidates.add(new File("/mnt/media_rw/udisk"));
+        candidates.add(new File("/storage/udisk"));
+        for (String parent : new String[]{"/mnt/media_rw", "/storage"}) {
+            File[] children = new File(parent).listFiles();
+            if (children != null) {
+                candidates.addAll(List.of(children));
+            }
+        }
+        for (File candidate : candidates) {
+            File music = new File(candidate, "iPod_Control/Music");
+            if (!music.isDirectory()) {
+                continue;
+            }
+            String path = candidate.getAbsolutePath();
+            if (seen.add(path)) {
+                volumes.add(Uri.fromFile(candidate));
+            }
+        }
+        return volumes;
+    }
+
+    /** SAF tree URIs go through DocumentFile.fromTreeUri; file:// roots from findMountedVolumes use fromFile. */
+    @Nullable
+    private static DocumentFile rootDocument(@NonNull Context context, @NonNull Uri rootUri) {
+        if ("file".equals(rootUri.getScheme())) {
+            return DocumentFile.fromFile(new File(rootUri.getPath()));
+        }
+        return DocumentFile.fromTreeUri(context, rootUri);
+    }
+
     /** Tracks and playlists read together from one iTunesDB. */
     private static final class LibraryData {
         final List<IpodTrack> tracks;
@@ -49,7 +90,7 @@ public final class IpodScanner {
     @NonNull
     public static IpodScanResult scan(@NonNull Context context, @NonNull Uri rootUri,
                                       @NonNull Consumer<String> progress) {
-        DocumentFile root = DocumentFile.fromTreeUri(context, rootUri);
+        DocumentFile root = rootDocument(context, rootUri);
         if (root == null || !root.isDirectory()) {
             return new IpodScanResult(false, List.of(), "The selected location is not a directory.");
         }
@@ -240,7 +281,7 @@ public final class IpodScanner {
         if (track.getArtworkDbId() == 0) {
             return null;
         }
-        DocumentFile root = DocumentFile.fromTreeUri(context, rootUri);
+        DocumentFile root = rootDocument(context, rootUri);
         if (root == null) {
             return null;
         }
