@@ -36,7 +36,14 @@ public class ItunesDbFixtureTest {
             }
         }
         assertTrue("The fixture should contain a media path", foundMediaTrack);
-        assertTrue("The fixture should preserve track numbers", tracks.get(0).getTrackNumber() > 0);
+        boolean foundTrackNumber = false;
+        for (IpodTrack track : tracks) {
+            if (track.getTrackNumber() > 0) {
+                foundTrackNumber = true;
+                break;
+            }
+        }
+        assertTrue("The fixture should preserve track numbers", foundTrackNumber);
     }
 
     @Test

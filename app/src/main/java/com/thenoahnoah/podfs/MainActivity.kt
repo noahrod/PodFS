@@ -33,6 +33,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -50,17 +52,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -106,13 +112,17 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.thenoahnoah.podfs.library.IpodScanResult
 import com.thenoahnoah.podfs.library.IpodScanner
 import com.thenoahnoah.podfs.library.IpodTrack
 import com.thenoahnoah.podfs.library.Artwork
+import com.thenoahnoah.podfs.ui.theme.AccentColor
+import com.thenoahnoah.podfs.ui.theme.AccentSettings
 import com.thenoahnoah.podfs.ui.theme.PodFSTheme
+import com.thenoahnoah.podfs.ui.theme.PodInk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -127,6 +137,7 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
         }
         enableEdgeToEdge()
+        AccentSettings.load(this)
         setContent {
             PodFSTheme {
                 PodFsApp()
@@ -625,6 +636,8 @@ private fun PodFsApp() {
                 modifier = Modifier.padding(padding),
                 activityLog = activityLog,
                 savedVolume = preferences.getString("selected_volume_uri", null) != null,
+                accent = AccentSettings.selected,
+                onSelectAccent = { AccentSettings.select(context, it) },
                 onChooseVolume = ::openVolumePicker,
                 onShareLog = ::shareDebugLog,
                 onClearLog = { activityLog = DebugLog.clear() },
@@ -853,7 +866,7 @@ private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Un
     Row(modifier = Modifier.fillMaxWidth().clickable { onTrack(track) }.padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         ArtworkThumb(artwork)
                 Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (track.trackNumber > 0) "${track.trackNumber}. ${track.title}" else track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(listOf(track.artist, track.album).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { "MP3 track" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
@@ -916,16 +929,16 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
     }
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
-        val artSize = if (landscape) (maxHeight * 0.6f).coerceIn(120.dp, 320.dp) else (maxHeight * 0.38f).coerceIn(120.dp, 270.dp)
-        val artwork_ = @Composable {
-            Surface(modifier = Modifier.size(artSize), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = artSize) }
+        // Art is a square that fills whichever dimension of its slot is smaller, so it grows with the screen.
+        val artwork_ = @Composable { slotSize: Dp ->
+            Surface(modifier = Modifier.size(slotSize), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = slotSize) }
             }
         }
-        val info = @Composable { horizontalAlignment: Alignment.Horizontal ->
-            Column(horizontalAlignment = horizontalAlignment) {
-                Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
-                Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
+        val info = @Composable {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         }
         val controls = @Composable {
@@ -946,27 +959,36 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
             Row(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(32.dp)
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                artwork_()
-                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.Start) {
+                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    artwork_(minOf(maxWidth, maxHeight))
+                }
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(12.dp))
-                    info(Alignment.Start)
+                    info()
                     Spacer(Modifier.height(16.dp))
                     controls()
                 }
             }
         } else {
             Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
                 Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(12.dp))
-                artwork_()
+                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    artwork_(minOf(maxWidth, maxHeight))
+                }
                 Spacer(Modifier.height(16.dp))
-                info(Alignment.CenterHorizontally)
+                info()
                 Spacer(Modifier.height(16.dp))
                 controls()
             }
@@ -978,7 +1000,7 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
 private const val LOG_PAGE = 20
 
 @Composable
-private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
+private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, accent: AccentColor, onSelectAccent: (AccentColor) -> Unit, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var visibleLines by remember { mutableStateOf(LOG_PAGE) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -987,6 +1009,25 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
             Text("PodFS device and diagnostics", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        item { SettingSection("APPEARANCE", Icons.Default.Palette) {
+            SettingRow("Primary color", accent.label, Icons.Default.Palette)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                AccentColor.entries.forEach { option ->
+                    val selected = option == accent
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(option.primary)
+                            .border(width = if (selected) 3.dp else 0.dp, color = MaterialTheme.colorScheme.onSurface, shape = CircleShape)
+                            .clickable { onSelectAccent(option) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (selected) Icon(Icons.Default.Check, option.label, tint = PodInk, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        } }
         item { SettingSection("SOURCE", Icons.Default.Usb) {
             SettingRow("iPod volume", if (savedVolume) "Remembered" else "Not selected", Icons.Default.Storage)
             Button(onClick = onChooseVolume, modifier = Modifier.fillMaxWidth()) { Text("Choose another volume") }

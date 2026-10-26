@@ -26,7 +26,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class IpodScanner {
-    private static final String CACHE_VERSION = "v5:";
+    private static final String CACHE_VERSION = "v6:";
     private static final Map<String, Map<Long, ArtworkDbParser.Location>> ARTWORK_INDEX_CACHE =
             new ConcurrentHashMap<>();
     private IpodScanner() {

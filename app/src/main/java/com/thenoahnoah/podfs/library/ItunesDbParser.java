@@ -221,7 +221,7 @@ public final class ItunesDbParser {
             path = "";
         }
         long trackId = headerLength >= 0x14 ? uint32(data, offset + 0x10) : 0;
-        int trackNumber = headerLength >= 0x18 ? (int) uint32(data, offset + 0x14) : 0;
+        int trackNumber = headerLength >= 0x30 ? (int) uint32(data, offset + 0x2C) : 0;
         long dbId = headerLength >= 0x78 ? uint64(data, offset + 0x70) : 0;
         return new IpodTrack(trackId, dbId, trackNumber, title.isEmpty() ? "Untitled" : title,
             artist, album, path, null);
