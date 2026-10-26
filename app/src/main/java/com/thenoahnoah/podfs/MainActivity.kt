@@ -72,6 +72,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -87,6 +89,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -369,6 +372,7 @@ class PlaybackActionReceiver : android.content.BroadcastReceiver() {
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     Library("Library", Icons.Default.LibraryMusic),
+    Search("Search", Icons.Default.Search),
     NowPlaying("Now Playing", Icons.Default.Headphones),
     Settings("Settings", Icons.Default.Settings)
 }
@@ -565,6 +569,7 @@ private fun PodFsApp() {
                         Text(
                             when (selectedTab) {
                                 AppTab.Library -> "YOUR LIBRARY"
+                                AppTab.Search -> "SEARCH"
                                 AppTab.NowPlaying -> "NOW PLAYING"
                                 AppTab.Settings -> "APP SETTINGS"
                             },
@@ -621,6 +626,18 @@ private fun PodFsApp() {
                 onTrack = ::togglePlayback,
                 onShuffle = ::playShuffled
             )
+            AppTab.Search -> SearchScreen(
+                modifier = Modifier.padding(padding),
+                tracks = scanResult?.tracks.orEmpty(),
+                rootUri = selectedVolumeUri,
+                onTrack = { track, queue -> togglePlayback(track, queue) },
+                onOpenGroup = { mode, name ->
+                    browseMode = mode
+                    selectedGroup = name
+                    selectedTab = AppTab.Library
+                    log("Search opened: $name")
+                }
+            )
             AppTab.NowPlaying -> NowPlayingScreen(
                 modifier = Modifier.padding(padding),
                 track = playingTrack,
@@ -674,6 +691,16 @@ private fun LibraryScreen(
             .map { playlist -> PlaylistEntry(playlist.name, playlist.trackIds.mapNotNull { tracksById[it] }) }
             .filter { it.tracks.isNotEmpty() }
     }
+    var filter by remember { mutableStateOf("") }
+    val visibleTracks = remember(tracks, browseMode, filter) {
+        val q = filter.trim()
+        if (q.isEmpty()) tracks else when (browseMode) {
+            BrowseMode.Songs -> tracks.filter { it.matchesSong(q) }
+            BrowseMode.Artists -> tracks.filter { it.artist.ifEmpty { "Unknown Artist" }.contains(q, ignoreCase = true) }
+            BrowseMode.Albums -> tracks.filter { it.album.ifEmpty { "Unknown Album" }.contains(q, ignoreCase = true) }
+            BrowseMode.Playlists -> tracks
+        }
+    }
     Column(modifier = modifier.fillMaxSize()) {
         if (result == null && !isScanning) {
             EmptyLibrary(onChooseVolume)
@@ -700,6 +727,9 @@ private fun LibraryScreen(
                 }
             }
             BrowseSelector(browseMode, onBrowseMode)
+            if (selectedGroup == null && browseMode != BrowseMode.Playlists) {
+                SearchField(filter, { filter = it }, "Filter ${browseMode.label.lowercase()}")
+            }
             if (browseMode == BrowseMode.Playlists) {
                 if (selectedGroup != null) {
                     val playlistTracks = playlists.firstOrNull { it.name == selectedGroup }?.tracks.orEmpty()
@@ -717,11 +747,11 @@ private fun LibraryScreen(
                 ShuffleRow(groupedTracks, onShuffle)
                 TrackList(groupedTracks, rootUri) { track -> onTrack(track, groupedTracks) }
             } else if (browseMode == BrowseMode.Songs) {
-                ShuffleRow(tracks, onShuffle)
-                TrackList(tracks, rootUri) { track -> onTrack(track, tracks) }
+                ShuffleRow(visibleTracks, onShuffle)
+                TrackList(visibleTracks, rootUri) { track -> onTrack(track, visibleTracks) }
             } else {
-                ShuffleRow(tracks, onShuffle)
-                GroupList(browseMode, tracks, rootUri, onGroup)
+                ShuffleRow(visibleTracks, onShuffle)
+                GroupList(browseMode, visibleTracks, rootUri, onGroup)
             }
         }
     }
@@ -758,6 +788,123 @@ private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> U
         }
     }
 }
+
+@Composable
+private fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        singleLine = true,
+        shape = RoundedCornerShape(12.dp),
+        placeholder = { Text(placeholder) },
+        leadingIcon = { Icon(Icons.Default.Search, null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQuery("") }) { Icon(Icons.Default.Clear, "Clear search") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SearchScreen(
+    modifier: Modifier,
+    tracks: List<IpodTrack>,
+    rootUri: Uri?,
+    onTrack: (IpodTrack, List<IpodTrack>) -> Unit,
+    onOpenGroup: (BrowseMode, String) -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val q = query.trim()
+    val songs = remember(tracks, q) { if (q.isEmpty()) emptyList() else tracks.filter { it.matchesSong(q) } }
+    val artists = remember(tracks, q) {
+        if (q.isEmpty()) emptyList()
+        else tracks.map { it.artist.ifEmpty { "Unknown Artist" } }.distinct()
+            .filter { it.contains(q, ignoreCase = true) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val albums = remember(tracks, q) {
+        if (q.isEmpty()) emptyList()
+        else tracks.map { it.album.ifEmpty { "Unknown Album" } }.distinct()
+            .filter { it.contains(q, ignoreCase = true) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val albumPreviews = remember(tracks) {
+        tracks.groupBy { it.album.ifEmpty { "Unknown Album" } }.mapValues { (_, albumTracks) -> albumTracks.first() }
+    }
+    Column(modifier = modifier.fillMaxSize()) {
+        SearchField(query, { query = it }, "Songs, artists, albums")
+        when {
+            q.isEmpty() -> Text(
+                "Search your library by song, artist, or album.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(20.dp)
+            )
+            songs.isEmpty() && artists.isEmpty() && albums.isEmpty() -> Text(
+                "No results for \"$q\".",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(20.dp)
+            )
+            else -> LazyColumn(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (artists.isNotEmpty()) {
+                    item { SearchSectionTitle("Artists") }
+                    items(artists) { name ->
+                        SearchGroupRow(name, null, rootUri) { onOpenGroup(BrowseMode.Artists, name) }
+                    }
+                }
+                if (albums.isNotEmpty()) {
+                    item { SearchSectionTitle("Albums") }
+                    items(albums) { name ->
+                        SearchGroupRow(name, albumPreviews[name], rootUri) { onOpenGroup(BrowseMode.Albums, name) }
+                    }
+                }
+                if (songs.isNotEmpty()) {
+                    item { SearchSectionTitle("Songs") }
+                    items(songs, key = { it.path }) { track ->
+                        TrackRow(track, rootUri) { onTrack(it, songs) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSectionTitle(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun SearchGroupRow(name: String, preview: IpodTrack?, rootUri: Uri?, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (preview != null) {
+            AlbumArtworkPreview(preview, rootUri)
+        }
+        Text(
+            name,
+            modifier = Modifier.weight(1f).padding(start = if (preview != null) 12.dp else 0.dp),
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+private fun IpodTrack.matchesSong(q: String): Boolean =
+    title.contains(q, ignoreCase = true) || artist.contains(q, ignoreCase = true) || album.contains(q, ignoreCase = true)
 
 @Composable
 private fun EmptyLibrary(onChooseVolume: () -> Unit) {
