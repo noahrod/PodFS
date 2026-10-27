@@ -9,6 +9,33 @@ This README is also a development handoff document. It describes the behavior
 that exists in the code today, the boundaries that are intentional, and the
 work that remains. Do not treat the roadmap as implemented functionality.
 
+## Tested Devices
+
+PodFS is built for phones, tablets, and Android car head units. The developer
+wrote and tested it on a **Google Pixel 10a** phone. The only other device tested
+so far is an **Asure 8-Core 6G+128G Car Radio for Nissan Sentra (2016-2019),
+10.1", Android 15** head unit. Other devices have not been tested.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="screenshots/Library-Songs.jpg" width="300" alt="Songs library"><br><sub><b>Songs</b></sub></td>
+    <td align="center"><img src="screenshots/Library-Albums.jpg" width="300" alt="Albums library"><br><sub><b>Albums</b></sub></td>
+    <td align="center"><img src="screenshots/Library-Artists.jpg" width="300" alt="Artists library"><br><sub><b>Artists</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="screenshots/Library-Playlists.jpg" width="300" alt="Playlists library"><br><sub><b>Playlists</b></sub></td>
+    <td align="center"><img src="screenshots/Search.jpg" width="300" alt="Search"><br><sub><b>Search</b></sub></td>
+    <td align="center"><img src="screenshots/Now%20Playing.jpg" width="300" alt="Now Playing"><br><sub><b>Now Playing</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="screenshots/Settings-Appearance-Source.jpg" width="300" alt="Settings: Appearance and source"><br><sub><b>Settings: Appearance</b></sub></td>
+    <td align="center"><img src="screenshots/Settings-Debug-Log.jpg" width="300" alt="Settings: debug log"><br><sub><b>Settings: Debug log</b></sub></td>
+    <td align="center"><img src="screenshots/Settings-About.jpg" width="300" alt="Settings: About"><br><sub><b>Settings: About</b></sub></td>
+  </tr>
+</table>
+
 ## Current Status
 
 The project contains a working first vertical slice:
