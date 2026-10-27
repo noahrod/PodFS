@@ -33,6 +33,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -50,22 +52,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -81,6 +87,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -90,14 +97,19 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
@@ -106,13 +118,17 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.thenoahnoah.podfs.library.IpodScanResult
 import com.thenoahnoah.podfs.library.IpodScanner
 import com.thenoahnoah.podfs.library.IpodTrack
 import com.thenoahnoah.podfs.library.Artwork
+import com.thenoahnoah.podfs.ui.theme.AccentColor
+import com.thenoahnoah.podfs.ui.theme.AccentSettings
 import com.thenoahnoah.podfs.ui.theme.PodFSTheme
+import com.thenoahnoah.podfs.ui.theme.PodInk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -127,6 +143,7 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1001)
         }
         enableEdgeToEdge()
+        AccentSettings.load(this)
         setContent {
             PodFSTheme {
                 PodFsApp()
@@ -262,7 +279,7 @@ class PlaybackController(
     private fun openCurrent() {
         val track = queue.getOrNull(index) ?: return
         player?.release()
-        player = try { MediaPlayer.create(context, Uri.parse(track.path)) } catch (_: RuntimeException) { null }
+        player = try { MediaPlayer.create(context, track.path.toUri()) } catch (_: RuntimeException) { null }
         if (player == null) {
             onLog("Playback could not open: ${track.title} (${track.path})")
             PlaybackHub.playingTrack = null
@@ -314,7 +331,7 @@ class PlaybackController(
     }
 
     private fun buildNotification(track: IpodTrack, playing: Boolean, artwork: Bitmap? = null) = NotificationCompat.Builder(context, "podfs_playback")
-        .setSmallIcon(com.thenoahnoah.podfs.R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setContentTitle(track.title).setContentText(track.artist.ifEmpty { track.album })
         .setLargeIcon(artwork)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(playing)
@@ -358,6 +375,7 @@ class PlaybackActionReceiver : android.content.BroadcastReceiver() {
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     Library("Library", Icons.Default.LibraryMusic),
+    Search("Search", Icons.Default.Search),
     NowPlaying("Now Playing", Icons.Default.Headphones),
     Settings("Settings", Icons.Default.Settings)
 }
@@ -366,7 +384,7 @@ private enum class BrowseMode(val label: String, val icon: ImageVector) {
     Songs("Songs", Icons.Default.MusicNote),
     Artists("Artists", Icons.Default.Person),
     Albums("Albums", Icons.Default.Album),
-    Playlists("Playlists", Icons.Default.QueueMusic)
+    Playlists("Playlists", Icons.AutoMirrored.Filled.QueueMusic)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -397,7 +415,7 @@ private fun PodFsApp() {
         val body = DebugLog.exportText()
         try {
             context.startActivity(
-                Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+                Intent(Intent.ACTION_SENDTO, "mailto:".toUri())
                     .putExtra(Intent.EXTRA_SUBJECT, subject)
                     .putExtra(Intent.EXTRA_TEXT, body)
             )
@@ -444,7 +462,7 @@ private fun PodFsApp() {
     }
 
     fun selectVolume(uri: Uri) {
-        preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
+        preferences.edit { putString("selected_volume_uri", uri.toString()) }
         selectedVolumeUri = uri
         if (uri.scheme == "content") {
             try {
@@ -471,6 +489,18 @@ private fun PodFsApp() {
         log("Shuffle started.")
         val shuffled = tracks.shuffled()
         playback.play(shuffled.first(), shuffled, selectedVolumeUri)
+        selectedTab = AppTab.NowPlaying
+    }
+
+    fun playShuffledAlbums(tracks: List<IpodTrack>) {
+        if (tracks.isEmpty()) return
+        log("Shuffle albums started.")
+        val albumOrder = tracks.groupBy { it.album.ifEmpty { "Unknown Album" } }
+            .values
+            .map { albumTracks -> albumTracks.sortedWith(trackOrder) }
+            .shuffled()
+        val queue = albumOrder.flatten()
+        playback.play(queue.first(), queue, selectedVolumeUri)
         selectedTab = AppTab.NowPlaying
     }
 
@@ -502,7 +532,7 @@ private fun PodFsApp() {
                 try {
                     context.startActivity(
                         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            Uri.parse("package:${context.packageName}"))
+                            "package:${context.packageName}".toUri())
                     )
                 } catch (_: ActivityNotFoundException) {
                     log("This device has no All files access settings screen.")
@@ -538,7 +568,7 @@ private fun PodFsApp() {
                 log("Restored previously selected volume.")
                 scanVolume(savedUri)
             } catch (_: SecurityException) {
-                preferences.edit().remove("selected_volume_uri").apply()
+                preferences.edit { remove("selected_volume_uri") }
                 log("Saved volume permission is no longer available.")
             }
         }
@@ -554,6 +584,7 @@ private fun PodFsApp() {
                         Text(
                             when (selectedTab) {
                                 AppTab.Library -> "YOUR LIBRARY"
+                                AppTab.Search -> "SEARCH"
                                 AppTab.NowPlaying -> "NOW PLAYING"
                                 AppTab.Settings -> "APP SETTINGS"
                             },
@@ -575,7 +606,7 @@ private fun PodFsApp() {
         bottomBar = {
             Column {
                 playingTrack?.let { track ->
-                    MiniPlayer(track, selectedVolumeUri, isPlaying) {
+                    MiniPlayer(track, selectedVolumeUri, isPlaying, onToggle = { playback.toggle() }) {
                         selectedTab = AppTab.NowPlaying
                     }
                 }
@@ -588,7 +619,7 @@ private fun PodFsApp() {
                             selected = selectedTab == tab,
                             onClick = { selectedTab = tab; log("Tab: ${tab.label}") },
                             icon = { Icon(tab.icon, tab.label) },
-                            label = { Text(tab.label) }
+                            label = { Text(tab.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                         )
                     }
                 }
@@ -608,7 +639,20 @@ private fun PodFsApp() {
                 onBack = { selectedGroup = null; log("Back to ${browseMode.label}") },
                 onChooseVolume = ::openVolumePicker,
                 onTrack = ::togglePlayback,
-                onShuffle = ::playShuffled
+                onShuffle = ::playShuffled,
+                onShuffleAlbums = ::playShuffledAlbums
+            )
+            AppTab.Search -> SearchScreen(
+                modifier = Modifier.padding(padding),
+                tracks = scanResult?.tracks.orEmpty(),
+                rootUri = selectedVolumeUri,
+                onTrack = { track, queue -> togglePlayback(track, queue) },
+                onOpenGroup = { mode, name ->
+                    browseMode = mode
+                    selectedGroup = name
+                    selectedTab = AppTab.Library
+                    log("Search opened: $name")
+                }
             )
             AppTab.NowPlaying -> NowPlayingScreen(
                 modifier = Modifier.padding(padding),
@@ -625,11 +669,13 @@ private fun PodFsApp() {
                 modifier = Modifier.padding(padding),
                 activityLog = activityLog,
                 savedVolume = preferences.getString("selected_volume_uri", null) != null,
+                accent = AccentSettings.selected,
+                onSelectAccent = { AccentSettings.select(context, it) },
                 onChooseVolume = ::openVolumePicker,
                 onShareLog = ::shareDebugLog,
                 onClearLog = { activityLog = DebugLog.clear() },
                 onClearVolume = {
-                    preferences.edit().remove("selected_volume_uri").apply()
+                    preferences.edit { remove("selected_volume_uri") }
                     scanResult = null
                     log("Remembered volume cleared.")
                 }
@@ -651,7 +697,8 @@ private fun LibraryScreen(
     onBack: () -> Unit,
     onChooseVolume: () -> Unit,
     onTrack: (IpodTrack, List<IpodTrack>) -> Unit,
-    onShuffle: (List<IpodTrack>) -> Unit
+    onShuffle: (List<IpodTrack>) -> Unit,
+    onShuffleAlbums: (List<IpodTrack>) -> Unit
 ) {
     val tracks = result?.tracks ?: emptyList()
     val tracksById = remember(tracks) { tracks.associateBy { it.trackId } }
@@ -660,6 +707,16 @@ private fun LibraryScreen(
         playlistSource
             .map { playlist -> PlaylistEntry(playlist.name, playlist.trackIds.mapNotNull { tracksById[it] }) }
             .filter { it.tracks.isNotEmpty() }
+    }
+    var filter by remember { mutableStateOf("") }
+    val visibleTracks = remember(tracks, browseMode, filter) {
+        val q = filter.trim()
+        if (q.isEmpty()) tracks else when (browseMode) {
+            BrowseMode.Songs -> tracks.filter { it.matchesSong(q) }
+            BrowseMode.Artists -> tracks.filter { it.artist.ifEmpty { "Unknown Artist" }.contains(q, ignoreCase = true) }
+            BrowseMode.Albums -> tracks.filter { it.album.ifEmpty { "Unknown Album" }.contains(q, ignoreCase = true) }
+            BrowseMode.Playlists -> tracks
+        }
     }
     Column(modifier = modifier.fillMaxSize()) {
         if (result == null && !isScanning) {
@@ -687,28 +744,36 @@ private fun LibraryScreen(
                 }
             }
             BrowseSelector(browseMode, onBrowseMode)
+            if (selectedGroup == null && browseMode != BrowseMode.Playlists) {
+                SearchField(filter, { filter = it }, "Filter ${browseMode.label.lowercase()}")
+            }
             if (browseMode == BrowseMode.Playlists) {
                 if (selectedGroup != null) {
                     val playlistTracks = playlists.firstOrNull { it.name == selectedGroup }?.tracks.orEmpty()
                     GroupHeader(selectedGroup, onBack)
-                    ShuffleRow(playlistTracks, onShuffle)
+                    ShuffleRow("Shuffle ${playlistTracks.size} songs", playlistTracks.isNotEmpty()) { onShuffle(playlistTracks) }
                     TrackList(playlistTracks, rootUri) { track -> onTrack(track, playlistTracks) }
                 } else {
-                    ShuffleRow(playlists.flatMap { it.tracks }.distinctBy { it.trackId }, onShuffle)
+                    val allPlaylistTracks = playlists.flatMap { it.tracks }.distinctBy { it.trackId }
+                    ShuffleRow("Shuffle ${allPlaylistTracks.size} songs", allPlaylistTracks.isNotEmpty()) { onShuffle(allPlaylistTracks) }
                     PlaylistList(playlists, onGroup)
                 }
             } else if (selectedGroup != null) {
                 GroupHeader(selectedGroup, onBack)
                 val groupedTracks = tracks.filter { browseMode.matches(it, selectedGroup) }
-                    .let { if (browseMode == BrowseMode.Albums) it.sortedWith(compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }) else it }
-                ShuffleRow(groupedTracks, onShuffle)
+                    .let { if (browseMode == BrowseMode.Songs || browseMode == BrowseMode.Playlists) it else it.sortedWith(albumThenTrackOrder) }
+                ShuffleRow("Shuffle ${groupedTracks.size} songs", groupedTracks.isNotEmpty()) { onShuffle(groupedTracks) }
                 TrackList(groupedTracks, rootUri) { track -> onTrack(track, groupedTracks) }
             } else if (browseMode == BrowseMode.Songs) {
-                ShuffleRow(tracks, onShuffle)
-                TrackList(tracks, rootUri) { track -> onTrack(track, tracks) }
+                ShuffleRow("Shuffle ${visibleTracks.size} songs", visibleTracks.isNotEmpty()) { onShuffle(visibleTracks) }
+                TrackList(visibleTracks, rootUri) { track -> onTrack(track, visibleTracks) }
+            } else if (browseMode == BrowseMode.Albums) {
+                val albumCount = visibleTracks.map { it.album.ifEmpty { "Unknown Album" } }.distinct().size
+                ShuffleRow("Shuffle $albumCount albums", visibleTracks.isNotEmpty()) { onShuffleAlbums(visibleTracks) }
+                GroupList(browseMode, visibleTracks, rootUri, onGroup)
             } else {
-                ShuffleRow(tracks, onShuffle)
-                GroupList(browseMode, tracks, rootUri, onGroup)
+                ShuffleRow("Shuffle ${visibleTracks.size} songs", visibleTracks.isNotEmpty()) { onShuffle(visibleTracks) }
+                GroupList(browseMode, visibleTracks, rootUri, onGroup)
             }
         }
     }
@@ -717,15 +782,25 @@ private fun LibraryScreen(
 private data class PlaylistEntry(val name: String, val tracks: List<IpodTrack>)
 
 @Composable
-private fun ShuffleRow(tracks: List<IpodTrack>, onShuffle: (List<IpodTrack>) -> Unit) {
+private fun ShuffleRow(label: String, enabled: Boolean, onClick: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = { onShuffle(tracks) }, enabled = tracks.isNotEmpty()) {
+        Button(onClick = onClick, enabled = enabled) {
             Icon(Icons.Default.Shuffle, null)
             Spacer(Modifier.width(8.dp))
-            Text("Shuffle ${tracks.size} songs")
+            Text(label)
         }
     }
 }
+
+// Album track order: by track number (unknown numbers last), then title.
+private val trackOrder: Comparator<IpodTrack> =
+    compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+
+// Artist drill-downs list albums in order, then tracks within each album by track number.
+private val albumThenTrackOrder: Comparator<IpodTrack> =
+    compareBy<IpodTrack> { it.album.ifEmpty { "Unknown Album" } }
+        .thenComparator { a, b -> String.CASE_INSENSITIVE_ORDER.compare(a.album.ifEmpty { "Unknown Album" }, b.album.ifEmpty { "Unknown Album" }) }
+        .then(trackOrder)
 
 @Composable
 private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> Unit) {
@@ -745,6 +820,123 @@ private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> U
         }
     }
 }
+
+@Composable
+private fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        singleLine = true,
+        shape = RoundedCornerShape(12.dp),
+        placeholder = { Text(placeholder) },
+        leadingIcon = { Icon(Icons.Default.Search, null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQuery("") }) { Icon(Icons.Default.Clear, "Clear search") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SearchScreen(
+    modifier: Modifier,
+    tracks: List<IpodTrack>,
+    rootUri: Uri?,
+    onTrack: (IpodTrack, List<IpodTrack>) -> Unit,
+    onOpenGroup: (BrowseMode, String) -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val q = query.trim()
+    val songs = remember(tracks, q) { if (q.isEmpty()) emptyList() else tracks.filter { it.matchesSong(q) } }
+    val artists = remember(tracks, q) {
+        if (q.isEmpty()) emptyList()
+        else tracks.map { it.artist.ifEmpty { "Unknown Artist" } }.distinct()
+            .filter { it.contains(q, ignoreCase = true) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val albums = remember(tracks, q) {
+        if (q.isEmpty()) emptyList()
+        else tracks.map { it.album.ifEmpty { "Unknown Album" } }.distinct()
+            .filter { it.contains(q, ignoreCase = true) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val albumPreviews = remember(tracks) {
+        tracks.groupBy { it.album.ifEmpty { "Unknown Album" } }.mapValues { (_, albumTracks) -> albumTracks.first() }
+    }
+    Column(modifier = modifier.fillMaxSize()) {
+        SearchField(query, { query = it }, "Songs, artists, albums")
+        when {
+            q.isEmpty() -> Text(
+                "Search your library by song, artist, or album.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(20.dp)
+            )
+            songs.isEmpty() && artists.isEmpty() && albums.isEmpty() -> Text(
+                "No results for \"$q\".",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(20.dp)
+            )
+            else -> LazyColumn(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (artists.isNotEmpty()) {
+                    item { SearchSectionTitle("Artists") }
+                    items(artists) { name ->
+                        SearchGroupRow(name, null, rootUri) { onOpenGroup(BrowseMode.Artists, name) }
+                    }
+                }
+                if (albums.isNotEmpty()) {
+                    item { SearchSectionTitle("Albums") }
+                    items(albums) { name ->
+                        SearchGroupRow(name, albumPreviews[name], rootUri) { onOpenGroup(BrowseMode.Albums, name) }
+                    }
+                }
+                if (songs.isNotEmpty()) {
+                    item { SearchSectionTitle("Songs") }
+                    items(songs, key = { it.path }) { track ->
+                        TrackRow(track, rootUri) { onTrack(it, songs) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSectionTitle(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun SearchGroupRow(name: String, preview: IpodTrack?, rootUri: Uri?, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (preview != null) {
+            AlbumArtworkPreview(preview, rootUri)
+        }
+        Text(
+            name,
+            modifier = Modifier.weight(1f).padding(start = if (preview != null) 12.dp else 0.dp),
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text("›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+private fun IpodTrack.matchesSong(q: String): Boolean =
+    title.contains(q, ignoreCase = true) || artist.contains(q, ignoreCase = true) || album.contains(q, ignoreCase = true)
 
 @Composable
 private fun EmptyLibrary(onChooseVolume: () -> Unit) {
@@ -789,7 +981,7 @@ private fun BrowseSelector(selected: BrowseMode, onSelected: (BrowseMode) -> Uni
 @Composable
 private fun GroupHeader(title: String, onBack: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
         Text(title, style = MaterialTheme.typography.titleLarge)
     }
 }
@@ -853,7 +1045,7 @@ private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Un
     Row(modifier = Modifier.fillMaxWidth().clickable { onTrack(track) }.padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         ArtworkThumb(artwork)
                 Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (track.trackNumber > 0) "${track.trackNumber}. ${track.title}" else track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(listOf(track.artist, track.album).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { "MP3 track" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
@@ -861,7 +1053,7 @@ private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Un
 }
 
 @Composable
-private fun ArtworkThumb(artwork: Artwork?, size: androidx.compose.ui.unit.Dp = 42.dp) {
+private fun ArtworkThumb(artwork: Artwork?, size: Dp = 42.dp) {
     if (artwork == null) {
         Surface(modifier = Modifier.size(size), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
             Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(10.dp).size(22.dp), tint = MaterialTheme.colorScheme.primary)
@@ -881,7 +1073,7 @@ private fun ArtworkThumb(artwork: Artwork?, size: androidx.compose.ui.unit.Dp = 
 }
 
 @Composable
-private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onOpen: () -> Unit) {
+private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var artwork by remember(track) { mutableStateOf<Artwork?>(track.artwork) }
     LaunchedEffect(track.trackId, rootUri) {
@@ -898,7 +1090,9 @@ private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onOp
                 Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                 Text(track.artist.ifEmpty { "Now playing from iPod" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
-            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+            IconButton(onClick = onToggle) {
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }
@@ -916,16 +1110,16 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
     }
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
-        val artSize = if (landscape) (maxHeight * 0.6f).coerceIn(120.dp, 320.dp) else (maxHeight * 0.38f).coerceIn(120.dp, 270.dp)
-        val artwork_ = @Composable {
-            Surface(modifier = Modifier.size(artSize), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = artSize) }
+        // Art is a square that fills whichever dimension of its slot is smaller, so it grows with the screen.
+        val artwork_ = @Composable { slotSize: Dp ->
+            Surface(modifier = Modifier.size(slotSize), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Box(contentAlignment = Alignment.Center) { ArtworkThumb(artwork, size = slotSize) }
             }
         }
-        val info = @Composable { horizontalAlignment: Alignment.Horizontal ->
-            Column(horizontalAlignment = horizontalAlignment) {
-                Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
-                Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = if (landscape) TextAlign.Start else TextAlign.Center)
+        val info = @Composable {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(track?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                Text(track?.artist ?: "Choose a song from your library", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         }
         val controls = @Composable {
@@ -946,27 +1140,34 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
             Row(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(32.dp)
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                artwork_()
-                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.Start) {
-                    Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.height(12.dp))
-                    info(Alignment.Start)
+                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    artwork_(minOf(maxWidth, maxHeight))
+                }
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(16.dp))
                     controls()
                 }
             }
         } else {
             Column(
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(12.dp))
-                artwork_()
+                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    artwork_(minOf(maxWidth, maxHeight))
+                }
                 Spacer(Modifier.height(16.dp))
-                info(Alignment.CenterHorizontally)
+                info()
                 Spacer(Modifier.height(16.dp))
                 controls()
             }
@@ -978,15 +1179,34 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
 private const val LOG_PAGE = 20
 
 @Composable
-private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
+private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, accent: AccentColor, onSelectAccent: (AccentColor) -> Unit, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var visibleLines by remember { mutableStateOf(LOG_PAGE) }
+    var visibleLines by remember { mutableIntStateOf(LOG_PAGE) }
     var confirmClear by remember { mutableStateOf(false) }
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
             Text("PodFS device and diagnostics", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        item { SettingSection("APPEARANCE", Icons.Default.Palette) {
+            SettingRow("Primary color", accent.label, Icons.Default.Palette)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                AccentColor.entries.forEach { option ->
+                    val selected = option == accent
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(option.primary)
+                            .border(width = if (selected) 3.dp else 0.dp, color = MaterialTheme.colorScheme.onSurface, shape = CircleShape)
+                            .clickable { onSelectAccent(option) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (selected) Icon(Icons.Default.Check, option.label, tint = PodInk, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        } }
         item { SettingSection("SOURCE", Icons.Default.Usb) {
             SettingRow("iPod volume", if (savedVolume) "Remembered" else "Not selected", Icons.Default.Storage)
             Button(onClick = onChooseVolume, modifier = Modifier.fillMaxWidth()) { Text("Choose another volume") }
@@ -1001,7 +1221,7 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
                 "github.com/noahrod",
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clickable {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/noahrod")))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/noahrod".toUri()))
                 }
             )
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)

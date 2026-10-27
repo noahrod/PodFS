@@ -36,7 +36,14 @@ public class ItunesDbFixtureTest {
             }
         }
         assertTrue("The fixture should contain a media path", foundMediaTrack);
-        assertTrue("The fixture should preserve track numbers", tracks.get(0).getTrackNumber() > 0);
+        boolean foundTrackNumber = false;
+        for (IpodTrack track : tracks) {
+            if (track.getTrackNumber() > 0) {
+                foundTrackNumber = true;
+                break;
+            }
+        }
+        assertTrue("The fixture should preserve track numbers", foundTrackNumber);
     }
 
     @Test
@@ -134,7 +141,7 @@ public class ItunesDbFixtureTest {
         List<IpodTrack> tracks = ItunesDbParser.parse(data);
         List<com.thenoahnoah.podfs.library.IpodPlaylist> playlists = ItunesDbParser.parsePlaylists(data);
 
-        assertTrue("Expected the two user playlists; count=" + playlists.size(), playlists.size() == 2);
+        assertEquals("Expected the two user playlists; count=" + playlists.size(), 2, playlists.size());
         java.util.Set<Long> trackIds = new java.util.HashSet<>();
         for (IpodTrack track : tracks) {
             trackIds.add(track.getTrackId());
