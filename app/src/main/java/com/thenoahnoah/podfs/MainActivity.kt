@@ -606,7 +606,7 @@ private fun PodFsApp() {
         bottomBar = {
             Column {
                 playingTrack?.let { track ->
-                    MiniPlayer(track, selectedVolumeUri, isPlaying) {
+                    MiniPlayer(track, selectedVolumeUri, isPlaying, onToggle = { playback.toggle() }) {
                         selectedTab = AppTab.NowPlaying
                     }
                 }
@@ -619,7 +619,7 @@ private fun PodFsApp() {
                             selected = selectedTab == tab,
                             onClick = { selectedTab = tab; log("Tab: ${tab.label}") },
                             icon = { Icon(tab.icon, tab.label) },
-                            label = { Text(tab.label) }
+                            label = { Text(tab.label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                         )
                     }
                 }
@@ -761,7 +761,7 @@ private fun LibraryScreen(
             } else if (selectedGroup != null) {
                 GroupHeader(selectedGroup, onBack)
                 val groupedTracks = tracks.filter { browseMode.matches(it, selectedGroup) }
-                    .let { if (browseMode == BrowseMode.Albums) it.sortedWith(trackOrder) else it }
+                    .let { if (browseMode == BrowseMode.Songs || browseMode == BrowseMode.Playlists) it else it.sortedWith(albumThenTrackOrder) }
                 ShuffleRow("Shuffle ${groupedTracks.size} songs", groupedTracks.isNotEmpty()) { onShuffle(groupedTracks) }
                 TrackList(groupedTracks, rootUri) { track -> onTrack(track, groupedTracks) }
             } else if (browseMode == BrowseMode.Songs) {
@@ -795,6 +795,12 @@ private fun ShuffleRow(label: String, enabled: Boolean, onClick: () -> Unit) {
 // Album track order: by track number (unknown numbers last), then title.
 private val trackOrder: Comparator<IpodTrack> =
     compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+
+// Artist drill-downs list albums in order, then tracks within each album by track number.
+private val albumThenTrackOrder: Comparator<IpodTrack> =
+    compareBy<IpodTrack> { it.album.ifEmpty { "Unknown Album" } }
+        .thenComparator { a, b -> String.CASE_INSENSITIVE_ORDER.compare(a.album.ifEmpty { "Unknown Album" }, b.album.ifEmpty { "Unknown Album" }) }
+        .then(trackOrder)
 
 @Composable
 private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> Unit) {
@@ -1067,7 +1073,7 @@ private fun ArtworkThumb(artwork: Artwork?, size: Dp = 42.dp) {
 }
 
 @Composable
-private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onOpen: () -> Unit) {
+private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var artwork by remember(track) { mutableStateOf<Artwork?>(track.artwork) }
     LaunchedEffect(track.trackId, rootUri) {
@@ -1084,7 +1090,9 @@ private fun MiniPlayer(track: IpodTrack, rootUri: Uri?, isPlaying: Boolean, onOp
                 Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                 Text(track.artist.ifEmpty { "Now playing from iPod" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
-            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+            IconButton(onClick = onToggle) {
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }
