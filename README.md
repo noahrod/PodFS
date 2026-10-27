@@ -27,7 +27,16 @@ The project contains a working first vertical slice:
   tracks, PodFS recursively scans `iPod_Control/Music` for `.mp3` files.
 - The UI provides Songs, Artists, Albums, and Playlists browse modes.
 - Playlists come from iTunesDB `mhyp` records and open into their songs.
-- Shuffle plays the current songs, group, or playlist in random order.
+- Shuffle plays the current songs or playlist in random order. In Albums mode,
+  Shuffle plays the albums in random order, each album in track-number order.
+- A Search tab finds songs, albums, and artists. The Songs, Artists, Albums, and
+  Playlists lists also include a filter field.
+- Track rows show the iPod track number (for example "3. Title"). Songs inside
+  an album or artist open in track-number order; playlists keep their own order.
+- The primary accent colour is selectable in Settings > Appearance. Blue is the
+  default.
+- The mini player at the bottom has a pause/play button that does not switch
+  tabs. Tapping the rest of the bar opens Now Playing.
 - A Settings tab shows a timestamped activity log of scan stages, browsing,
   and playback events. It is saved to app storage across launches, and uncaught
   crashes are recorded with their stack trace. The Email debug log button opens
@@ -62,8 +71,8 @@ artwork. The current scope is deliberately narrow:
 - Scan after volume selection and automatically when a remembered volume is
   restored.
 - Read-only access; no editing, syncing, deleting, or writing to the iPod.
-- iPod-like music browsing currently includes Songs, Artists, Albums, and
-  Playlists, with drill-down from an artist, album, or playlist to its songs.
+- iPod-like music browsing currently includes Songs, Artists, Albums, Playlists,
+  and Search, with drill-down from an artist, album, or playlist to its songs.
 
 ## User Flow
 
@@ -80,10 +89,13 @@ artwork. The current scope is deliberately narrow:
   start, completion/failure, and elapsed time.
 6. If the volume looks like an iPod, the Songs browse mode is shown.
 7. Choose Artists, Albums, or Playlists to browse groups, then select a group
-  to see its songs. Shuffle plays them in random order.
-8. Tap a track to play or pause it. Use the Now Playing screen or Android's
-  media notification for previous, next, pause, and stop.
-9. Open the Settings tab to read the debug log.
+  to see its songs. Shuffle plays them in random order; in Albums mode it
+  shuffles the albums and plays each one in track order.
+8. Use the Search tab, or the filter field in a list, to find songs, albums, or
+  artists.
+9. Tap a track to play or pause it. Use the mini player's pause button, the
+  Now Playing screen, or Android's media notification for transport controls.
+10. Open the Settings tab to change the accent colour and read the debug log.
 
 Picked URIs are passed to `DocumentFile.fromTreeUri`. The mount-point fallback
 is the only place that uses `java.io.File`; it wraps the result in
@@ -138,7 +150,10 @@ MainActivity.kt
 - launches `OpenDocumentTree`;
 - takes persistable read permission;
 - launches scanning on `Dispatchers.IO`;
-- displays scan status and Songs, Artists, Albums, and Playlists browse modes;
+- displays scan status and Songs, Artists, Albums, and Playlists browse modes,
+  plus a Search tab and a filter field in each list;
+- shows an Appearance section in Settings to choose the accent colour
+  (`ui/theme/Theme.kt`, persisted in SharedPreferences);
 - shows the Settings tab with the newest 20 activity-log lines first, a Load more
   button that reveals 20 more per press, an Email debug log button, and a Delete
   debug log button that asks for confirmation;
@@ -165,8 +180,10 @@ MainActivity.kt
   range for a visible track.
 9. Falls back to recursive MP3 discovery when database-backed scanning returns
    no tracks.
-10. Sorts the main library result by title, case-insensitively. Album drill-down
-  uses the iPod database track number, with unknown numbers afterward.
+10. Sorts the main library result by title, case-insensitively. Album and artist
+  drill-downs use the iPod database track number (`mhit` offset `0x2C`), with
+  unknown numbers afterward. Playlists keep the order from `mhyp`. The metadata
+  cache version is `v6`.
 11. Reports each stage (volume check, cache, iTunesDB, ArtworkDB, filename
   fallback) to the activity log through a progress callback.
 
