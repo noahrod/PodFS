@@ -492,6 +492,18 @@ private fun PodFsApp() {
         selectedTab = AppTab.NowPlaying
     }
 
+    fun playShuffledAlbums(tracks: List<IpodTrack>) {
+        if (tracks.isEmpty()) return
+        log("Shuffle albums started.")
+        val albumOrder = tracks.groupBy { it.album.ifEmpty { "Unknown Album" } }
+            .values
+            .map { albumTracks -> albumTracks.sortedWith(trackOrder) }
+            .shuffled()
+        val queue = albumOrder.flatten()
+        playback.play(queue.first(), queue, selectedVolumeUri)
+        selectedTab = AppTab.NowPlaying
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) selectVolume(uri)
     }
@@ -627,7 +639,8 @@ private fun PodFsApp() {
                 onBack = { selectedGroup = null; log("Back to ${browseMode.label}") },
                 onChooseVolume = ::openVolumePicker,
                 onTrack = ::togglePlayback,
-                onShuffle = ::playShuffled
+                onShuffle = ::playShuffled,
+                onShuffleAlbums = ::playShuffledAlbums
             )
             AppTab.Search -> SearchScreen(
                 modifier = Modifier.padding(padding),
@@ -684,7 +697,8 @@ private fun LibraryScreen(
     onBack: () -> Unit,
     onChooseVolume: () -> Unit,
     onTrack: (IpodTrack, List<IpodTrack>) -> Unit,
-    onShuffle: (List<IpodTrack>) -> Unit
+    onShuffle: (List<IpodTrack>) -> Unit,
+    onShuffleAlbums: (List<IpodTrack>) -> Unit
 ) {
     val tracks = result?.tracks ?: emptyList()
     val tracksById = remember(tracks) { tracks.associateBy { it.trackId } }
@@ -737,23 +751,28 @@ private fun LibraryScreen(
                 if (selectedGroup != null) {
                     val playlistTracks = playlists.firstOrNull { it.name == selectedGroup }?.tracks.orEmpty()
                     GroupHeader(selectedGroup, onBack)
-                    ShuffleRow(playlistTracks, onShuffle)
+                    ShuffleRow("Shuffle ${playlistTracks.size} songs", playlistTracks.isNotEmpty()) { onShuffle(playlistTracks) }
                     TrackList(playlistTracks, rootUri) { track -> onTrack(track, playlistTracks) }
                 } else {
-                    ShuffleRow(playlists.flatMap { it.tracks }.distinctBy { it.trackId }, onShuffle)
+                    val allPlaylistTracks = playlists.flatMap { it.tracks }.distinctBy { it.trackId }
+                    ShuffleRow("Shuffle ${allPlaylistTracks.size} songs", allPlaylistTracks.isNotEmpty()) { onShuffle(allPlaylistTracks) }
                     PlaylistList(playlists, onGroup)
                 }
             } else if (selectedGroup != null) {
                 GroupHeader(selectedGroup, onBack)
                 val groupedTracks = tracks.filter { browseMode.matches(it, selectedGroup) }
-                    .let { if (browseMode == BrowseMode.Albums) it.sortedWith(compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }) else it }
-                ShuffleRow(groupedTracks, onShuffle)
+                    .let { if (browseMode == BrowseMode.Albums) it.sortedWith(trackOrder) else it }
+                ShuffleRow("Shuffle ${groupedTracks.size} songs", groupedTracks.isNotEmpty()) { onShuffle(groupedTracks) }
                 TrackList(groupedTracks, rootUri) { track -> onTrack(track, groupedTracks) }
             } else if (browseMode == BrowseMode.Songs) {
-                ShuffleRow(visibleTracks, onShuffle)
+                ShuffleRow("Shuffle ${visibleTracks.size} songs", visibleTracks.isNotEmpty()) { onShuffle(visibleTracks) }
                 TrackList(visibleTracks, rootUri) { track -> onTrack(track, visibleTracks) }
+            } else if (browseMode == BrowseMode.Albums) {
+                val albumCount = visibleTracks.map { it.album.ifEmpty { "Unknown Album" } }.distinct().size
+                ShuffleRow("Shuffle $albumCount albums", visibleTracks.isNotEmpty()) { onShuffleAlbums(visibleTracks) }
+                GroupList(browseMode, visibleTracks, rootUri, onGroup)
             } else {
-                ShuffleRow(visibleTracks, onShuffle)
+                ShuffleRow("Shuffle ${visibleTracks.size} songs", visibleTracks.isNotEmpty()) { onShuffle(visibleTracks) }
                 GroupList(browseMode, visibleTracks, rootUri, onGroup)
             }
         }
@@ -763,15 +782,19 @@ private fun LibraryScreen(
 private data class PlaylistEntry(val name: String, val tracks: List<IpodTrack>)
 
 @Composable
-private fun ShuffleRow(tracks: List<IpodTrack>, onShuffle: (List<IpodTrack>) -> Unit) {
+private fun ShuffleRow(label: String, enabled: Boolean, onClick: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = { onShuffle(tracks) }, enabled = tracks.isNotEmpty()) {
+        Button(onClick = onClick, enabled = enabled) {
             Icon(Icons.Default.Shuffle, null)
             Spacer(Modifier.width(8.dp))
-            Text("Shuffle ${tracks.size} songs")
+            Text(label)
         }
     }
 }
+
+// Album track order: by track number (unknown numbers last), then title.
+private val trackOrder: Comparator<IpodTrack> =
+    compareBy<IpodTrack> { it.trackNumber == 0 }.thenBy { it.trackNumber }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
 
 @Composable
 private fun PlaylistList(entries: List<PlaylistEntry>, onPlaylist: (String) -> Unit) {
@@ -1119,9 +1142,7 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.height(12.dp))
-                    info()
+                    Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(16.dp))
                     controls()
                 }
@@ -1132,7 +1153,7 @@ private fun NowPlayingScreen(modifier: Modifier, track: IpodTrack?, rootUri: Uri
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                Text("NOW PLAYING", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(12.dp))
                 BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     artwork_(minOf(maxWidth, maxHeight))
