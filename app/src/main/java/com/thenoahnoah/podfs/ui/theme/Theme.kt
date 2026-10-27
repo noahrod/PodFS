@@ -1,6 +1,7 @@
 package com.thenoahnoah.podfs.ui.theme
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -33,7 +34,7 @@ object AccentSettings {
 
     fun select(context: Context, color: AccentColor) {
         selected = color
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, color.name).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString(KEY, color.name) }
     }
 }
 

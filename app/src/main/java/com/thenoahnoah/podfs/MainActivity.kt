@@ -58,7 +58,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
@@ -70,7 +69,6 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
@@ -99,14 +97,19 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
@@ -276,7 +279,7 @@ class PlaybackController(
     private fun openCurrent() {
         val track = queue.getOrNull(index) ?: return
         player?.release()
-        player = try { MediaPlayer.create(context, Uri.parse(track.path)) } catch (_: RuntimeException) { null }
+        player = try { MediaPlayer.create(context, track.path.toUri()) } catch (_: RuntimeException) { null }
         if (player == null) {
             onLog("Playback could not open: ${track.title} (${track.path})")
             PlaybackHub.playingTrack = null
@@ -328,7 +331,7 @@ class PlaybackController(
     }
 
     private fun buildNotification(track: IpodTrack, playing: Boolean, artwork: Bitmap? = null) = NotificationCompat.Builder(context, "podfs_playback")
-        .setSmallIcon(com.thenoahnoah.podfs.R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_launcher_foreground)
         .setContentTitle(track.title).setContentText(track.artist.ifEmpty { track.album })
         .setLargeIcon(artwork)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(playing)
@@ -381,7 +384,7 @@ private enum class BrowseMode(val label: String, val icon: ImageVector) {
     Songs("Songs", Icons.Default.MusicNote),
     Artists("Artists", Icons.Default.Person),
     Albums("Albums", Icons.Default.Album),
-    Playlists("Playlists", Icons.Default.QueueMusic)
+    Playlists("Playlists", Icons.AutoMirrored.Filled.QueueMusic)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -412,7 +415,7 @@ private fun PodFsApp() {
         val body = DebugLog.exportText()
         try {
             context.startActivity(
-                Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+                Intent(Intent.ACTION_SENDTO, "mailto:".toUri())
                     .putExtra(Intent.EXTRA_SUBJECT, subject)
                     .putExtra(Intent.EXTRA_TEXT, body)
             )
@@ -459,7 +462,7 @@ private fun PodFsApp() {
     }
 
     fun selectVolume(uri: Uri) {
-        preferences.edit().putString("selected_volume_uri", uri.toString()).apply()
+        preferences.edit { putString("selected_volume_uri", uri.toString()) }
         selectedVolumeUri = uri
         if (uri.scheme == "content") {
             try {
@@ -517,7 +520,7 @@ private fun PodFsApp() {
                 try {
                     context.startActivity(
                         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            Uri.parse("package:${context.packageName}"))
+                            "package:${context.packageName}".toUri())
                     )
                 } catch (_: ActivityNotFoundException) {
                     log("This device has no All files access settings screen.")
@@ -553,7 +556,7 @@ private fun PodFsApp() {
                 log("Restored previously selected volume.")
                 scanVolume(savedUri)
             } catch (_: SecurityException) {
-                preferences.edit().remove("selected_volume_uri").apply()
+                preferences.edit { remove("selected_volume_uri") }
                 log("Saved volume permission is no longer available.")
             }
         }
@@ -659,7 +662,7 @@ private fun PodFsApp() {
                 onShareLog = ::shareDebugLog,
                 onClearLog = { activityLog = DebugLog.clear() },
                 onClearVolume = {
-                    preferences.edit().remove("selected_volume_uri").apply()
+                    preferences.edit { remove("selected_volume_uri") }
                     scanResult = null
                     log("Remembered volume cleared.")
                 }
@@ -949,7 +952,7 @@ private fun BrowseSelector(selected: BrowseMode, onSelected: (BrowseMode) -> Uni
 @Composable
 private fun GroupHeader(title: String, onBack: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
         Text(title, style = MaterialTheme.typography.titleLarge)
     }
 }
@@ -1021,7 +1024,7 @@ private fun TrackRow(track: IpodTrack, rootUri: Uri?, onTrack: (IpodTrack) -> Un
 }
 
 @Composable
-private fun ArtworkThumb(artwork: Artwork?, size: androidx.compose.ui.unit.Dp = 42.dp) {
+private fun ArtworkThumb(artwork: Artwork?, size: Dp = 42.dp) {
     if (artwork == null) {
         Surface(modifier = Modifier.size(size), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
             Icon(Icons.Default.MusicNote, null, modifier = Modifier.padding(10.dp).size(22.dp), tint = MaterialTheme.colorScheme.primary)
@@ -1149,7 +1152,7 @@ private const val LOG_PAGE = 20
 @Composable
 private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedVolume: Boolean, accent: AccentColor, onSelectAccent: (AccentColor) -> Unit, onChooseVolume: () -> Unit, onClearVolume: () -> Unit, onShareLog: () -> Unit, onClearLog: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var visibleLines by remember { mutableStateOf(LOG_PAGE) }
+    var visibleLines by remember { mutableIntStateOf(LOG_PAGE) }
     var confirmClear by remember { mutableStateOf(false) }
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
@@ -1189,7 +1192,7 @@ private fun SettingsScreen(modifier: Modifier, activityLog: List<String>, savedV
                 "github.com/noahrod",
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clickable {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/noahrod")))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/noahrod".toUri()))
                 }
             )
             Text("Read-only playback for mounted sixth-generation iPod Classic volumes.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)

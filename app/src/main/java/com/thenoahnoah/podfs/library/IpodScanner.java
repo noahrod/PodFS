@@ -248,7 +248,7 @@ public final class IpodScanner {
             Map<String, Map<String, DocumentFile>> directoryCache = new HashMap<>();
             List<IpodTrack> resolved = new ArrayList<>();
             for (IpodTrack track : parsed) {
-                if (!track.getPath().toLowerCase().endsWith(".mp3")) {
+                if (!track.getPath().toLowerCase(Locale.ROOT).endsWith(".mp3")) {
                     continue;
                 }
                 DocumentFile media = childFileCached(root, databasePath(track.getPath()),
@@ -522,7 +522,7 @@ public final class IpodScanner {
         for (DocumentFile child : directory.listFiles()) {
             if (child.isDirectory()) {
                 collectMp3s(child, tracks);
-            } else if (child.getName() != null && child.getName().toLowerCase().endsWith(".mp3")) {
+            } else if (child.getName() != null && child.getName().toLowerCase(Locale.ROOT).endsWith(".mp3")) {
                 tracks.add(new IpodTrack(displayName(child.getName()), child.getUri().toString()));
             }
         }

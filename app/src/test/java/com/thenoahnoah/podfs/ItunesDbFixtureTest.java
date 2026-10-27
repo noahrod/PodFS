@@ -141,7 +141,7 @@ public class ItunesDbFixtureTest {
         List<IpodTrack> tracks = ItunesDbParser.parse(data);
         List<com.thenoahnoah.podfs.library.IpodPlaylist> playlists = ItunesDbParser.parsePlaylists(data);
 
-        assertTrue("Expected the two user playlists; count=" + playlists.size(), playlists.size() == 2);
+        assertEquals("Expected the two user playlists; count=" + playlists.size(), 2, playlists.size());
         java.util.Set<Long> trackIds = new java.util.HashSet<>();
         for (IpodTrack track : tracks) {
             trackIds.add(track.getTrackId());
